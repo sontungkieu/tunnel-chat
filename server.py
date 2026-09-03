@@ -1944,11 +1944,11 @@ def html_page() -> str:
   </style>
 </head>
 <body>
-  <nav style="padding:8px 16px"><a href="/desktop">Desktop app</a> · <a href="/codex">WSL CLI</a> · <a href="/">Fix queue</a></nav>
+  <nav style="padding:8px 16px"><a href="/codex">Desktop app</a> · <a href="/codex/cli">WSL CLI</a> · <a href="/queue">Fix queue</a></nav>
   <header>
     <h1>RLCSD Fix Chat</h1>
     <div>
-      <a href="/desktop">Desktop app</a> · <a href="/codex">WSL CLI</a>
+      <a href="/codex">Desktop app</a> · <a href="/codex/cli">WSL CLI</a>
       <button id="downloadRepo" type="button">Download zip</button>
       <span id="status">connecting</span>
     </div>
@@ -2804,11 +2804,11 @@ def codex_page() -> str:
   </style>
 </head>
 <body>
-  <nav style="padding:8px 16px"><a href="/desktop">Desktop app</a> · <a href="/codex">WSL CLI</a> · <a href="/">Fix queue</a></nav>
+  <nav style="padding:8px 16px"><a href="/codex">Desktop app</a> · <a href="/codex/cli">WSL CLI</a> · <a href="/queue">Fix queue</a></nav>
   <header>
     <h1>RLCSD Codex Mode</h1>
     <div>
-      <a href="/">Fix queue</a>
+      <a href="/queue">Fix queue</a>
       <span id="status">connecting</span>
     </div>
   </header>
@@ -3362,7 +3362,15 @@ class ChatHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
             return
-        if path == "/desktop":
+        if path in {"/", "/desktop", "/desktop/", "/codex/", "/chat"}:
+            target = "/chat/#" if path in {"/", "/chat"} else "/codex"
+            self.send_response(HTTPStatus.FOUND)
+            self.send_header("location", target)
+            self.send_header("content-length", "0")
+            self.send_header("cache-control", "no-store")
+            self.end_headers()
+            return
+        if path == "/codex":
             data = (BASE_DIR / "static" / "desktop.html").read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("content-type", "text/html; charset=utf-8")
@@ -3371,7 +3379,7 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if path == "/":
+        if path == "/queue":
             data = html_page().encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("content-type", "text/html; charset=utf-8")
@@ -3416,7 +3424,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                 return
             self.send_event_stream()
             return
-        if path == "/codex":
+        if path == "/codex/cli":
             data = codex_page().encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("content-type", "text/html; charset=utf-8")

@@ -1,7 +1,7 @@
 """Disposable loopback UI fixture. No real agent, user state or model calls.
 
 Run: uv run python tests/preview_desktop.py
-Open: http://127.0.0.1:18787/desktop#token=preview-only
+Open: http://127.0.0.1:18787/codex#token=preview-only
 Link: 11111111-1111-4111-8111-111111111111
 """
 from pathlib import Path

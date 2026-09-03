@@ -1,0 +1,28 @@
+name: tunnel-chat-web
+services:
+  browser:
+    image: lscr.io/linuxserver/chromium:latest
+    shm_size: "1gb"
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Asia/Ho_Chi_Minh
+      SUBFOLDER: /chat/
+      TITLE: ChatGPT web
+      CHROME_CLI: https://chatgpt.com/
+      HARDEN_DESKTOP: "true"
+      DISABLE_OPEN_TOOLS: "true"
+      DISABLE_SUDO: "true"
+      DISABLE_TERMINALS: "true"
+      START_DOCKER: "false"
+      RESTART_APP: "true"
+      SELKIES_COMMAND_ENABLED: "false|locked"
+      SELKIES_FILE_TRANSFERS: "none"
+      SELKIES_CLIPBOARD_ENABLED: "false|locked"
+      SELKIES_UI_SIDEBAR_SHOW_FILES: "false"
+      SELKIES_UI_SIDEBAR_SHOW_APPS: "false"
+    volumes:
+      - "${CHAT_WEB_PROFILE_DIR:?Set CHAT_WEB_PROFILE_DIR to a dedicated data directory}:/config"
+    restart: unless-stopped

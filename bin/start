@@ -1,42 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 cd "$(dirname "$0")/.."
 uv run python server.py init-env >/dev/null
-
-set -a
-source .env.local
-set +a
-
-mkdir -p logs run data
-PID_FILE="run/server.pid"
-if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-    echo "server already running pid=$(cat "$PID_FILE")"
-    exit 0
-fi
-
-uv run python - <<'PY'
-from pathlib import Path
-import os
-import subprocess
-import sys
-import time
-
-base = Path.cwd()
-log = open(base / "logs/server.log", "a", encoding="utf-8")
-proc = subprocess.Popen(
-    [sys.executable, "server.py", "serve"],
-    cwd=base,
-    stdin=subprocess.DEVNULL,
-    stdout=log,
-    stderr=subprocess.STDOUT,
-    start_new_session=True,
-)
-Path("run/server.pid").write_text(str(proc.pid), encoding="utf-8")
-time.sleep(1)
-os.kill(proc.pid, 0)
-PY
-
-echo "server started pid=$(cat "$PID_FILE")"
-echo "local url: http://${HOST:-127.0.0.1}:${PORT:-8787}/"
-echo "run ./bin/url to print the tokenized URL"
+uv run python service.py start
