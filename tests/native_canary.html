@@ -1,5 +1,5 @@
 <!doctype html><html lang="vi"><meta charset="utf-8"><title>Tunnel Chat input canary</title>
-<style>body{margin:0;background:#e7effa;font:24px system-ui}main{height:100vh;display:grid;place-content:center;gap:20px;text-align:center}textarea{width:500px;height:160px;font:24px system-ui}button{font:24px system-ui;padding:12px}#result{min-height:40px}</style>
+<style>body{margin:0;background:#e7effa;font:24px system-ui}main{height:100vh;display:grid;place-content:center;gap:20px;text-align:center}textarea{width:500px;height:160px;font:24px system-ui}button{font:24px system-ui;padding:12px}#result{min-height:40px}.pulse{position:fixed;right:30px;bottom:24px;width:16px;height:16px;border-radius:50%;background:#2463eb;animation:move 1s linear infinite alternate}@keyframes move{to{transform:translateX(-120px)}}@media(prefers-reduced-motion:reduce){.pulse{animation:none}}</style>
 <main><h1>Kiểm thử truyền trang web</h1><textarea autofocus aria-label="Canary input" placeholder="Nhập thử ở đây"></textarea>
 <button onclick="document.getElementById('result').textContent='Đã nhận: '+document.querySelector('textarea').value">Kiểm tra</button><div id="result">Chưa gửi</div></main>
-<div style="height:120vh;padding:40px">Cuộn trang thành công</div></html>
+<div style="height:120vh;padding:40px">Cuộn trang thành công</div><div class="pulse" aria-hidden="true"></div></html>

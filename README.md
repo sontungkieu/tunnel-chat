@@ -13,7 +13,9 @@ Local chat data and settings are not moved.
 ## Setup
 
 The server runs in Linux/WSL and requires Bash, Git, Python 3.10+ and `uv`.
-The shared gateway also requires native WSL Node.js 18+ (no npm dependencies).
+The shared gateway requires native WSL Node.js 18+. The native browser backend
+also uses the locked `ws` package; run `npm ci --omit=optional --ignore-scripts`
+in WSL once after cloning or updating dependencies.
 Cloudflare access requires `cloudflared`. Desktop mode additionally requires
 **Windows Node.js 18+** and the desktop app running under the same Windows account.
 Linux or Windows Node can run the JavaScript tests.
@@ -22,6 +24,7 @@ Linux or Windows Node can run the JavaScript tests.
 git clone https://github.com/sontungkieu/tunnel-chat.git
 cd tunnel-chat
 uv sync --frozen
+npm ci --omit=optional --ignore-scripts
 uv run python server.py init-env
 ```
 
@@ -237,7 +240,7 @@ source, not chat history or credentials. Back up the SQLite DB before migrations
 ```bash
 uv run --frozen python -m unittest discover -s tests -v
 node tests/test_shared_transport.js
-node --test tests/test_desktop_ipc.cjs tests/test_gateway.cjs tests/test_native_browser.cjs
+npm test
 ```
 
 Tests cover migration, backend isolation, attachment ownership, operation

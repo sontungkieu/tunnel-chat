@@ -11,8 +11,10 @@ only needs this tunnel's separate access password.
 
 ## Start on the existing Windows + WSL installation
 
-Requirements: Windows Chrome (Edge is configurable), Windows Node.js 20.14+
-with WebSocket support, WSL Node.js 18+, Python and uv. No Docker or npm install.
+Requirements: Windows Chrome (Edge is configurable), Windows Node.js 20.14+,
+WSL Node.js 18+, Python and uv. Install the small shared JavaScript dependency
+from the checkout with `npm ci --omit=optional --ignore-scripts`. No Docker or
+native addon is needed; the Windows helper loads the same `ws` package.
 
     ./bin/chat-web-start
 
@@ -59,7 +61,8 @@ See [Google's supported-browser sign-in guidance](https://support.google.com/acc
   after resizing. Multiple viewers control the same page.
 - "ChatGPT" returns the dedicated page to chatgpt.com; "Tải lại trang" reloads it.
 - Keep Windows awake and the Chrome window open. Images update at up to about
-  eight frames per second, with a periodic refresh for idle/background pages.
+  twenty captures per second. The received rate depends on the connection and
+  page activity; static pages also refresh periodically.
 - This release supports text interaction. Audio/video calls, microphone,
   native dialogs, uploads and downloads are not forwarded. Native file pickers
   are intercepted and produce a notice instead of exposing local file paths.
@@ -90,7 +93,7 @@ Never publish this directory or substitute a personal Chrome profile.
 
     Company browser -> existing HTTPS tunnel -> gateway /chat/
         -> loopback WSL web bridge
-        <- outbound loopback HTTP from a detached Windows helper
+        <- outbound loopback WebSocket from a detached Windows helper
         -> loopback DevTools connection to the dedicated Chrome page
 
 The Windows helper connects to the WSL bridge through Windows localhost
@@ -100,9 +103,25 @@ capability token and is not routed by the public gateway. Only fixed page
 controls and validated input events are accepted; there is no public arbitrary
 DevTools command, script evaluation, cookie or file API.
 
-Frames and input remain in memory. Diagnostics do not record page contents or
-typed text. Commands are serialized and are never automatically replayed after
-an uncertain outcome. Slow viewers drop old frames.
+Both images and controls use WebSockets: `/chat/api/socket` for the authenticated
+viewer and `/__driver/socket` for the private Windows helper. JPEG pixels travel
+as binary packets. Each viewer permits at most two unacknowledged frames and
+retains only the newest waiting image, so a slow link cannot accumulate old
+screens. A stalled viewer reconnects and receives the current image.
+
+The client coalesces adjacent mouse moves and wheel events while preserving
+clicks, keyboard events and text. Up to eight commands travel without waiting
+for separate network round trips; Chrome executes them in order. Disconnects
+fail pending work and clear unsent actions. Commands are never replayed.
+
+The `Mạng` indicator measures a WebSocket round trip to the home bridge; it is
+not total input-to-display latency. Frames and input remain in memory.
+Diagnostics do not record page contents or typed text.
+
+The previous SSE image route and per-event HTTP input routes return 426; reload
+older viewers after upgrading. This transport works with Quick Tunnel WebSockets,
+without depending on SSE, which Quick Tunnels do not support. See
+[Cloudflare tunnel protocol support](https://developers.cloudflare.com/sandbox/api/tunnels/).
 
 Tunnel authentication uses an expiring HttpOnly cookie scoped to /chat/.
 Both HTTP streams and WebSockets close on logout/expiry. Codex credentials are
@@ -116,7 +135,8 @@ The native transport was checked with a real Windows Chrome canary: page
 capture, clicking and inserting Vietnamese text worked through the web viewer.
 The canary is disabled in production; the live target is chatgpt.com.
 Protocol, input validation, private-driver authentication, gateway auth,
-stream revocation and Codex regressions have automated coverage. No test sends
+stream revocation, bounded frame buffering, input coalescing, pipelining,
+disconnect handling and Codex regressions have automated coverage (`npm test`). No test sends
 a model prompt or signs into an OpenAI account on behalf of the user.
 
 For the disposable local canary only, supply CHAT_WEB_CANARY=1 and
