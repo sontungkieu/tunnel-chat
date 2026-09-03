@@ -1,5 +1,6 @@
 'use strict';
 const MAGIC = 0x54434631, HEADER = 24, MAX_FRAME = 5 * 1024 * 1024;
+const MAX_BUFFERED = 256 * 1024, MAX_IN_FLIGHT = 1024 * 1024;
 function unpackFrame(packet) {
   if (!Buffer.isBuffer(packet) || packet.length < HEADER + 4 || packet.length > MAX_FRAME || packet.readUInt32BE(0) !== MAGIC)
     throw new Error('Invalid image packet');
@@ -19,26 +20,38 @@ function packFrame({ data, width, height, capturedAt = Date.now(), seq = 0 }) {
   unpackFrame(packet);
   return packet;
 }
-// Two frames may be in transit. Everything newer replaces a single waiting frame.
+// Cover network travel time without buffering an unbounded history of old images.
 class FrameWindow {
-  constructor(socket, { limit = 2, timeoutMs = 5000 } = {}) {
-    this.socket = socket; this.limit = limit; this.timeoutMs = timeoutMs;
-    this.inFlight = new Map(); this.latest = null; this.lastSent = 0;
+  constructor(socket, { limit = 2, timeoutMs = 5000, now = Date.now } = {}) {
+    this.socket = socket; this.limit = limit; this.timeoutMs = timeoutMs; this.now = now;
+    this.inFlight = new Map(); this.bytes = 0; this.latest = null; this.lastSent = 0; this.rtts = [];
+  }
+  networkRtt(ms) {
+    if (!Number.isFinite(ms) || ms < 0 || ms > 5000) return;
+    this.rtts.push(ms); if (this.rtts.length > 30) this.rtts.shift();
+    // Use transport pongs, not decode ACKs: a slow renderer must not grow its queue.
+    // The recent minimum ignores transient congestion; hard frame/byte limits still apply.
+    this.limit = Math.max(2, Math.min(12, Math.ceil(Math.min(...this.rtts) * 60 / 1000) + 2));
+    this.flush();
   }
   offer(frame) { this.latest = frame; this.flush(); }
   flush() {
-    if (!this.latest || this.socket.readyState !== 1 || this.inFlight.size >= this.limit || this.socket.bufferedAmount > MAX_FRAME) return;
-    const frame = this.latest; this.latest = null;
+    if (!this.latest || this.socket.readyState !== 1 || this.inFlight.size >= this.limit || this.socket.bufferedAmount > MAX_BUFFERED) return;
+    const frame = this.latest;
+    // Permit one large frame, but never queue several large images together.
+    if (this.inFlight.size && this.bytes + frame.packet.length > MAX_IN_FLIGHT) return;
+    this.latest = null;
     if (frame.seq <= this.lastSent) return;
-    this.lastSent = frame.seq; this.inFlight.set(frame.seq, Date.now());
+    this.lastSent = frame.seq; this.bytes += frame.packet.length;
+    this.inFlight.set(frame.seq, { sent: this.now(), bytes: frame.packet.length });
     this.socket.send(frame.packet, { binary: true, compress: false }, error => { if (error) this.socket.terminate(); });
   }
   ack(seq) {
     if (!Number.isInteger(seq) || seq < 1 || seq > this.lastSent) throw new Error('Invalid frame acknowledgement');
-    for (const id of this.inFlight.keys()) if (id <= seq) this.inFlight.delete(id);
+    for (const [id, frame] of this.inFlight) if (id <= seq) { this.bytes -= frame.bytes; this.inFlight.delete(id); }
     this.flush();
   }
-  reset() { this.inFlight.clear(); this.latest = null; }
-  stale(now = Date.now()) { return [...this.inFlight.values()].some(sent => now - sent > this.timeoutMs); }
+  reset() { this.inFlight.clear(); this.bytes = 0; this.latest = null; }
+  stale(now = this.now()) { return [...this.inFlight.values()].some(frame => now - frame.sent > this.timeoutMs); }
 }
 module.exports = { packFrame, unpackFrame, FrameWindow, MAX_FRAME };

@@ -3,6 +3,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { timingSafeEqual } = require('node:crypto');
+const { performance } = require('node:perf_hooks');
 const { EventEmitter } = require('node:events');
 const { WebSocketServer } = require('ws');
 const { FrameWindow, unpackFrame, MAX_FRAME } = require('./frame-stream.cjs');
@@ -105,7 +106,19 @@ function createNativeServer(driver, { canaryFile } = {}) {
   driver.on('frame', onFrame); driver.on('status', onStatus); driver.on('notice', onNotice);
   publicWS.on('connection', socket => {
     const window = new FrameWindow(socket); viewers.set(socket, window);
-    socket.on('error', () => {}); socket.on('close', () => viewers.delete(socket));
+    let probeStarted = 0, probeId = 0, waitingForPong = false;
+    const probe = () => {
+      if (socket.readyState !== 1 || waitingForPong) return;
+      probeStarted = performance.now(); waitingForPong = true;
+      socket.ping('rtt:' + ++probeId);
+    };
+    socket.on('pong', data => {
+      if (!waitingForPong || data.toString() !== 'rtt:' + probeId) return;
+      waitingForPong = false; window.networkRtt(performance.now() - probeStarted);
+    });
+    const probeTimer = setInterval(probe, 1000); probeTimer.unref(); probe();
+    socket.on('error', () => {});
+    socket.on('close', () => { clearInterval(probeTimer); viewers.delete(socket); });
     send(socket, { event:'status', ...driver.status });
     if (driver.frame) window.offer(driver.frame);
     let lastId = 0, pending = 0;
@@ -190,6 +203,8 @@ function createNativeServer(driver, { canaryFile } = {}) {
 if (require.main === module) {
   const config = JSON.parse(fs.readFileSync(process.env.CHAT_WEB_NATIVE_CONFIG, 'utf8'));
   const driver = new Driver(config.token);
+  if (process.env.CHAT_WEB_MANUAL_LOGIN === '1') driver.receive({ event:'status', ready:false,
+    message:'Đang tạm dừng để đăng nhập trực tiếp trong Chrome trên máy cá nhân. Đăng nhập xong, đóng Chrome rồi bật lại chế độ truyền.' });
   const server = createNativeServer(driver, { canaryFile: process.env.CHAT_WEB_CANARY === '1'
     ? path.join(__dirname, '../tests/native_canary.html') : undefined });
   server.listen(Number(process.env.CHAT_WEB_NATIVE_PORT || 3000), '127.0.0.1', () => console.log('Native web bridge ready'));

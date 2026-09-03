@@ -13,10 +13,13 @@ sys.path.insert(0, str(ROOT))
 import server
 
 
-def launch_windows(config_path):
+def launch_windows(config_path, *, prepare_only=False):
     script = subprocess.check_output(["wslpath", "-w", str(ROOT / "chatgpt-web/native-launcher.cjs")], text=True).strip()
     windows_config = subprocess.check_output(["wslpath", "-w", str(config_path)], text=True).strip()
-    subprocess.run(["/mnt/c/Program Files/nodejs/node.exe", script, windows_config], check=True)
+    args = ["/mnt/c/Program Files/nodejs/node.exe", script, windows_config]
+    if prepare_only:
+        args.append("--prepare-only")
+    subprocess.run(args, check=True)
 
 
 def main():
@@ -48,14 +51,16 @@ def main():
             else:
                 raise RuntimeError("Native browser bridge did not stop")
         pid_file.unlink(missing_ok=True)
+        pid = None
         print("Browser streaming stopped; Chrome and its login remain open.", flush=True)
         if action == ["login"]:
             script = subprocess.check_output([
                 "wslpath", "-w", str(ROOT / "chatgpt-web/native-login.cjs")
             ], text=True).strip()
             browser = config.get("CHAT_WEB_BROWSER_BIN", r"C:\Program Files\Google\Chrome\Application\chrome.exe")
-            raise SystemExit(subprocess.call(["/mnt/c/Program Files/nodejs/node.exe", script, state_root, browser]))
-        return
+            subprocess.run(["/mnt/c/Program Files/nodejs/node.exe", script, state_root, browser], check=True)
+        else:
+            return
     if pid:
         launch_windows(config_path)
         print(f"Native browser bridge already running pid={pid}")
@@ -78,6 +83,8 @@ def main():
     config_path.write_text(json.dumps(runtime))
     env = {key: value for key, value in os.environ.items() if key in {"PATH", "HOME", "LANG"}}
     env.update({"CHAT_WEB_NATIVE_CONFIG": str(config_path), "CHAT_WEB_NATIVE_PORT": str(port)})
+    if action == ["login"]:
+        env["CHAT_WEB_MANUAL_LOGIN"] = "1"
     if runtime.get("CHAT_WEB_CANARY"):
         env["CHAT_WEB_CANARY"] = runtime["CHAT_WEB_CANARY"]
     for name in ("run", "logs"):
@@ -90,8 +97,12 @@ def main():
     if child.poll() is not None:
         raise RuntimeError("Native web bridge failed; inspect logs/chat-web-native.log")
     pid_file.write_text(str(child.pid))
-    launch_windows(config_path)
-    print(f"Native browser bridge started pid={child.pid}; data stays on D:.")
+    if action == ["login"]:
+        launch_windows(config_path, prepare_only=True)
+        print(f"Browser viewer waiting for manual sign-in pid={child.pid}; streaming stays paused.")
+    else:
+        launch_windows(config_path)
+        print(f"Native browser bridge started pid={child.pid}; data stays on D:.")
 
 
 if __name__ == "__main__":

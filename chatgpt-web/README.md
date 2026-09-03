@@ -38,8 +38,9 @@ may not be secure". The streaming Chrome uses DevTools; sign in locally in a
 normal Chrome window with streaming paused:
 
 1. Close the dedicated Chrome window and any Google sign-in popup.
-2. Run `./bin/chat-web-login`. It stops the web bridge and opens the same owned
-   profile in normal Chrome, without a debugging endpoint or app-window mode.
+2. Run `./bin/chat-web-login`. It stops the streaming helper and opens the same
+   owned profile in normal Chrome, without a debugging endpoint or app-window
+   mode. The authenticated viewer stays available with a manual-sign-in message.
 3. Sign into ChatGPT yourself on the personal PC. Finish any Google/MFA steps
    there. Then close that Chrome window and run `./bin/chat-web-start`.
 
@@ -60,9 +61,10 @@ See [Google's supported-browser sign-in guidance](https://support.google.com/acc
 - The page initially adapts to the viewer's available area; use "Vừa cửa sổ"
   after resizing. Multiple viewers control the same page.
 - "ChatGPT" returns the dedicated page to chatgpt.com; "Tải lại trang" reloads it.
-- Keep Windows awake and the Chrome window open. Images update at up to about
-  twenty captures per second. The received rate depends on the connection and
-  page activity; static pages also refresh periodically.
+- Keep Windows awake and the Chrome window open. Capture pacing targets 60 FPS;
+  the actual rate depends on Chrome, the connection and page activity. The FPS
+  counter reports images actually drawn by the viewer. Static pages refresh
+  periodically and show "Hình tĩnh" instead of an artificial high frame rate.
 - This release supports text interaction. Audio/video calls, microphone,
   native dialogs, uploads and downloads are not forwarded. Native file pickers
   are intercepted and produce a notice instead of exposing local file paths.
@@ -105,17 +107,26 @@ DevTools command, script evaluation, cookie or file API.
 
 Both images and controls use WebSockets: `/chat/api/socket` for the authenticated
 viewer and `/__driver/socket` for the private Windows helper. JPEG pixels travel
-as binary packets. Each viewer permits at most two unacknowledged frames and
-retains only the newest waiting image, so a slow link cannot accumulate old
-screens. A stalled viewer reconnects and receives the current image.
+as binary packets. A viewer starts with two unacknowledged frames, then adjusts
+its window to cover the measured network round trip (up to twelve frames). This
+avoids the old 2 / RTT frame-rate ceiling: at 150 ms, two frames alone capped
+the viewer at about 13 FPS. Transport pongs measure the network independently
+of image decoding. Byte limits also bound large frames and socket buffering;
+only the newest waiting image is retained. A stalled viewer reconnects and
+receives the current image.
+
+The viewer decodes JPEGs with ImageBitmap and draws them on a canvas at the next
+display refresh. Superseded waiting frames are discarded and bitmap resources
+are closed after drawing. This is still JPEG over WebSocket, not WebRTC video.
 
 The client coalesces adjacent mouse moves and wheel events while preserving
 clicks, keyboard events and text. Up to eight commands travel without waiting
 for separate network round trips; Chrome executes them in order. Disconnects
 fail pending work and clear unsent actions. Commands are never replayed.
 
-The `Mạng` indicator measures a WebSocket round trip to the home bridge; it is
-not total input-to-display latency. Frames and input remain in memory.
+The FPS counter measures canvas draws over the last two seconds. It is not a
+promise of a constant 60 FPS. The `Mạng` indicator measures a WebSocket round
+trip to the home bridge; it is not total input-to-display latency. Frames and input remain in memory.
 Diagnostics do not record page contents or typed text.
 
 The previous SSE image route and per-event HTTP input routes return 426; reload
@@ -135,9 +146,10 @@ The native transport was checked with a real Windows Chrome canary: page
 capture, clicking and inserting Vietnamese text worked through the web viewer.
 The canary is disabled in production; the live target is chatgpt.com.
 Protocol, input validation, private-driver authentication, gateway auth,
-stream revocation, bounded frame buffering, input coalescing, pipelining,
-disconnect handling and Codex regressions have automated coverage (`npm test`). No test sends
-a model prompt or signs into an OpenAI account on behalf of the user.
+stream revocation, bounded frame buffering, a simulated 150 ms link, input
+coalescing, pipelining, disconnect handling and Codex regressions have automated
+coverage (`npm test`). No test sends a model prompt or signs into an OpenAI
+account on behalf of the user.
 
 For the disposable local canary only, supply CHAT_WEB_CANARY=1 and
 CHAT_WEB_START_URL=http://127.0.0.1:3000/__native_canary to ./bin/chat-web-start.

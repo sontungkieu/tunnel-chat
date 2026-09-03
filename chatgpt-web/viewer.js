@@ -3,10 +3,13 @@ const screen = document.getElementById('screen');
 const status = document.getElementById('status');
 const notice = document.getElementById('notice');
 const latency = document.getElementById('latency');
+const fps = document.getElementById('fps');
+const context = screen.getContext('2d', { alpha:false });
+let paintedFrames = 0, rateStarted = performance.now();
 const buffer = new InputBuffer();
 const pending = new Map();
 let socket, latestFrame, painting = false, ready = false, fitted = false, nextId = 0;
-let flushTimer, reconnectTimer, stopped = false, imageURL, generation = 0, pingStarted = 0, pingId = 0;
+let flushTimer, reconnectTimer, stopped = false, generation = 0, pingStarted = 0, pingId = 0;
 function warn(text = '') { notice.textContent = text; notice.hidden = !text; }
 function transmit(value) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); }
 function failWork() {
@@ -38,25 +41,26 @@ function send(data) { enqueue({ type:'input', data }); }
 function action(type, data) { return new Promise((resolve,reject) => enqueue(type === 'input' ? { type, data } : { type, ...data }, resolve,reject)); }
 function clearPicture() {
   generation++; latestFrame = null; painting = false;
-  screen.onload = null; screen.onerror = null; screen.removeAttribute('src'); screen.style.display = 'none';
-  if (imageURL) URL.revokeObjectURL(imageURL); imageURL = null;
+  context.clearRect(0, 0, screen.width, screen.height); screen.style.display = 'none';
+  paintedFrames = 0; fps.textContent = ''; rateStarted = performance.now();
   document.getElementById('waiting').hidden = false;
 }
 async function paint() {
   if (!latestFrame || painting) return;
   const frame = latestFrame, epoch = generation, connection = socket;
   latestFrame = null; painting = true;
-  const url = URL.createObjectURL(new Blob([frame.bytes], { type:'image/jpeg' }));
+  let bitmap;
   try {
-    const image = new Image(); image.src = url; await image.decode();
-    if (generation !== epoch || socket !== connection) { URL.revokeObjectURL(url); return; }
-    const previousURL = imageURL; imageURL = url; screen.src = url;
-    screen.style.display = 'block'; document.getElementById('waiting').hidden = true;
-    if (previousURL) URL.revokeObjectURL(previousURL);
+    bitmap = await createImageBitmap(new Blob([frame.bytes], { type:'image/jpeg' }));
     await new Promise(resolve => requestAnimationFrame(resolve));
-    if (generation === epoch && socket === connection) transmit({ type:'frameAck', seq:frame.seq });
-  } catch { URL.revokeObjectURL(url); if (socket === connection) connection.close(); }
-  finally { if (generation === epoch) { painting = false; paint(); } }
+    if (generation !== epoch || socket !== connection) return;
+    if (screen.width !== bitmap.width) screen.width = bitmap.width;
+    if (screen.height !== bitmap.height) screen.height = bitmap.height;
+    context.drawImage(bitmap, 0, 0); paintedFrames++;
+    screen.style.display = 'block'; document.getElementById('waiting').hidden = true;
+    transmit({ type:'frameAck', seq:frame.seq });
+  } catch { if (socket === connection) connection.close(); }
+  finally { bitmap?.close(); if (generation === epoch) { painting = false; paint(); } }
 }
 async function reconnect() {
   if (stopped) return;
@@ -83,7 +87,7 @@ function connect() {
     try { value = JSON.parse(event.data); } catch { connection.close(); return; }
     if (value.event === 'status') {
       ready = value.ready; status.textContent = value.message;
-      if (!ready) { failWork(); clearPicture(); }
+      if (!ready) { failWork(); clearPicture(); document.getElementById('waiting').textContent = value.message; }
       else if (!fitted) { fitted = true; fit(); }
     } else if (value.event === 'notice') warn(value.message);
     else if (value.event === 'ack') {
@@ -104,6 +108,9 @@ function connect() {
   connection.onerror = () => { status.textContent = 'Chưa kết nối được đường truyền.'; };
 }
 const pingTimer = setInterval(() => {
+  const now = performance.now(), rate = Math.round(paintedFrames * 1000 / (now - rateStarted));
+  fps.textContent = ready ? (rate > 1 ? rate + ' FPS' : 'Hình tĩnh') : '';
+  paintedFrames = 0; rateStarted = now;
   if (socket?.readyState === WebSocket.OPEN) { pingStarted = performance.now(); transmit({ type:'ping', id:++pingId }); }
 }, 2000);
 function modifiers(event) { return (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0); }

@@ -20,6 +20,7 @@ async function main() {
   if (!status) throw new Error('Local browser bridge is not reachable from Windows');
   if (status.ready) { console.log('Native browser helper already connected'); return; }
   execFileSync('C:\\Windows\\System32\\icacls.exe', [configPath, '/inheritance:r', '/grant:r', os.userInfo().username + ':F'], { stdio:'ignore', windowsHide:true });
+  if (process.argv[3] === '--prepare-only') { console.log('Browser viewer ready; streaming stays paused for manual sign-in'); return; }
   const stdout = fs.openSync(path.join(state,'driver.stdout.log'),'a');
   const stderr = fs.openSync(path.join(state,'driver.stderr.log'),'a');
   const child = spawn(process.execPath, [path.join(__dirname,'native-driver.cjs'),configPath],

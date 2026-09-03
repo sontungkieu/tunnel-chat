@@ -74,6 +74,33 @@ test('slow viewers keep two frames in flight and only the newest waiting image',
   window.ack(2); assert.deepEqual(sent,[1,2,100]); assert.equal(window.inFlight.size,1);
   assert.throws(()=>window.ack(101)); assert.equal(window.stale(Date.now()+6000),true);
 });
+test('a 150 ms link sustains the source cadence without a two-frame RTT cap', () => {
+  let clock=0, sent=0, seq=0, peak=0;
+  const arrivals=[];
+  const socket={readyState:1,bufferedAmount:0,send:packet=>{sent++;arrivals.push({at:clock+150,seq:unpackFrame(packet).seq});}};
+  const window=new FrameWindow(socket,{now:()=>clock}); window.networkRtt(150);
+  for(clock=0;clock<4000;clock++) {
+    while(arrivals.length&&arrivals[0].at<=clock) window.ack(arrivals.shift().seq);
+    if(clock>=seq*1000/60) window.offer(unpackFrame(packFrame({data:JPEG,width:100,height:100,seq:++seq})));
+    peak=Math.max(peak,window.inFlight.size);
+  }
+  assert.ok(sent>=235, 'network latency must not cut 60 FPS to 13 FPS');
+  assert.ok(peak<=12); assert.ok(window.inFlight.size<=window.limit);
+  // Congestion outliers must not expand a window based on the recent base RTT.
+  const limit=window.limit; window.networkRtt(3000); assert.equal(window.limit,limit);
+});
+test('congested sockets and large images keep bounded queues and resume with the latest frame', () => {
+  const sent=[], socket={readyState:1,bufferedAmount:0,send:packet=>sent.push(unpackFrame(packet).seq)};
+  const window=new FrameWindow(socket); window.networkRtt(200);
+  const jpeg=Buffer.alloc(400*1024); JPEG.copy(jpeg);
+  const frame=seq=>unpackFrame(packFrame({data:jpeg,width:100,height:100,seq}));
+  for(let seq=1;seq<=100;seq++) window.offer(frame(seq));
+  assert.deepEqual(sent,[1,2]); assert.equal(window.latest.seq,100);
+  socket.bufferedAmount=300*1024; window.ack(2); assert.deepEqual(sent,[1,2]);
+  socket.bufferedAmount=0; window.flush(); assert.deepEqual(sent,[1,2,100]);
+  window.reset(); assert.equal(window.bytes,0); assert.equal(window.inFlight.size,0);
+  window.networkRtt(NaN); assert.ok(window.limit<=12);
+});
 test('mouse bursts coalesce while clicks, Unicode and key order remain intact', () => {
   const q=new InputBuffer();
   const mouse=(type,x=0,deltaY=0)=>({command:{type:'input',data:{kind:'mouse',type,x,y:0,buttons:0,modifiers:0,deltaX:0,deltaY}}});

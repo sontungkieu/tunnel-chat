@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { performance } = require('node:perf_hooks');
 const { WebSocket } = require('ws');
 const { packFrame } = require('./frame-stream.cjs');
 const { CDP, inputCommand } = require('./native-protocol.cjs');
@@ -15,14 +16,28 @@ for (const key of ['CHAT_WEB_NATIVE_ROOT','CHAT_WEB_BROWSER_BIN','CHAT_WEB_START
   if (config[key]) process.env[key] = config[key];
 const bridgeOrigin = new URL(config.origin);
 if (bridgeOrigin.origin !== config.origin || bridgeOrigin.hostname !== '127.0.0.1') throw new Error('Invalid local bridge origin');
-let channelSocket;
+let channelSocket, frameTimer, sentAt = 0;
+function queueFrame(frame) {
+  pendingFrame = frame;
+  if (!frameTimer) frameTimer = setTimeout(flushFrame, Math.max(0, 1000 / 60 - (performance.now() - sentAt)));
+}
+function flushFrame() {
+  frameTimer = null;
+  if (!pendingFrame || closing || channelSocket.readyState !== WebSocket.OPEN) return;
+  if (channelSocket.bufferedAmount > 256 * 1024) { frameTimer = setTimeout(flushFrame, 17); return; }
+  const frame = pendingFrame; pendingFrame = null;
+  try {
+    channelSocket.send(packFrame(frame), { binary:true, compress:false });
+    sentAt = performance.now(); lastFrame = Date.now();
+  } catch { stop(); }
+}
 function emit(value) {
   if (!closing && channelSocket?.readyState === WebSocket.OPEN)
     channelSocket.send(JSON.stringify(value), { compress: false });
 }
 function stop() {
   if (closing) return;
-  closing = true;
+  closing = true; clearTimeout(frameTimer);
   channelSocket?.close(); cdp?.socket.close();
   setTimeout(() => process.exit(0), 500).unref();
 }
@@ -76,7 +91,7 @@ async function connect() {
   cdp.on('Page.screencastFrame', frame => {
     if (!receivedFirstFrame) { process.stderr.write('First screencast frame: ' + frame.data.length + ' bytes\n'); receivedFirstFrame = true; }
     cdp.call('Page.screencastFrameAck', { sessionId: frame.sessionId }).catch(() => {});
-    pendingFrame = { data: frame.data, width: viewport.width, height: viewport.height, capturedAt: Date.now() };
+    queueFrame({ data: frame.data, width: viewport.width, height: viewport.height, capturedAt: Date.now() });
   });
   await cdp.call('Page.enable');
   await metrics();
@@ -86,13 +101,6 @@ async function connect() {
   cdp.on('Page.fileChooserOpened', () => emit({ event: 'notice', message: 'Tải tệp qua tunnel chưa được hỗ trợ.' }));
   await cdp.call('Page.startScreencast', { format: 'jpeg', quality: 75, maxWidth: 1600, maxHeight: 1200, everyNthFrame: 1 });
   emit({ event: 'status', ready: true, message: 'Đã kết nối Chrome trên máy cá nhân.' });
-  // Only the latest image waits for the private socket; control replies send immediately.
-  setInterval(() => {
-    if (!pendingFrame || closing || channelSocket.readyState !== WebSocket.OPEN || channelSocket.bufferedAmount > 256 * 1024) return;
-    const frame = pendingFrame; pendingFrame = null;
-    try { channelSocket.send(packFrame(frame), { binary:true, compress:false }); lastFrame = Date.now(); }
-    catch { stop(); }
-  }, 50).unref();
   let capturing = false;
   setInterval(async () => {
     if (Date.now() - lastFrame < 1000 || closing || capturing) return;
@@ -100,7 +108,7 @@ async function connect() {
     try {
       await metrics();
       const frame = await cdp.call('Page.captureScreenshot', { format:'jpeg', quality:75, captureBeyondViewport:false });
-      pendingFrame = { data:frame.data, width:viewport.width, height:viewport.height, capturedAt:Date.now() };
+      queueFrame({ data:frame.data, width:viewport.width, height:viewport.height, capturedAt:Date.now() });
     } catch {}
     finally { capturing = false; }
   }, 1000).unref();
