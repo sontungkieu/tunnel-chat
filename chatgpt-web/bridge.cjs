@@ -122,7 +122,7 @@ function createChatBridge({ passwordFile, upstream, sessionSeconds = 28800 }) {
       page(res, 403, 'Yêu cầu không hợp lệ.'); return;
     }
     if (!target) { unavailable(res); return; }
-    proxyRequest(req, res, target, { privateChat: true, unavailable });
+    proxyRequest(req, res, target, { privateChat: true, unavailable, session });
   }
   function upgrade(req, socket, head) {
     const session = sessionFor(req);

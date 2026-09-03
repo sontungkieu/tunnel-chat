@@ -60,6 +60,9 @@ async function fixture(t, browserEnabled = true) {
   });
   const browser = http.createServer((req, res) => {
     seen.browser.push(req.headers);
+    if (req.url === '/chat/live') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('data: ready\n\n'); return;
+    }
     const chunks = [];
     req.on('data', chunk => chunks.push(chunk));
     req.on('end', () => {
@@ -190,4 +193,17 @@ test('open WebSocket is closed when its access session expires', async t => {
   ws.socket.resume();
   await once(ws.socket, 'close');
   assert.equal(sessions.sockets.size, 0);
+});
+
+test('logout also closes authenticated HTTP image streams', async t => {
+  const f = await fixture(t); const cookie = await f.cookie();
+  const stream = await new Promise((resolve,reject) => {
+    http.get(f.base + '/chat/live', {headers:{cookie}}, resolve).on('error', reject);
+  });
+  stream.on('error', () => {});
+  await once(stream, 'data');
+  const closed = new Promise(resolve => stream.once('close', resolve));
+  await request(f.base, '/chat/_auth/logout', { method:'POST', headers:{cookie,origin:f.base} });
+  await closed;
+  assert.equal((await request(f.base, '/chat/live', {headers:{cookie}})).status, 401);
 });

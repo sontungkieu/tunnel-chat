@@ -14,7 +14,7 @@ function upstreamURL(value) {
       url.pathname !== '/' || url.search || url.hash) throw new Error('Invalid upstream origin');
   return url;
 }
-function proxyRequest(req, res, target, { privateChat = false, unavailable } = {}) {
+function proxyRequest(req, res, target, { privateChat = false, unavailable, session } = {}) {
   const headers = headersWithoutHop(req.headers);
   if (privateChat) {
     for (const key of Object.keys(headers)) {
@@ -48,6 +48,13 @@ function proxyRequest(req, res, target, { privateChat = false, unavailable } = {
   });
   req.on('aborted', () => upstream.destroy());
   res.on('close', () => upstream.destroy());
+  if (session) {
+    session.sockets.add(res);
+    const expires = setTimeout(() => res.destroy(), Math.max(1, session.expires - Date.now()));
+    expires.unref();
+    const cleanup = () => { clearTimeout(expires); session.sockets.delete(res); };
+    res.on('close', cleanup); res.on('finish', cleanup);
+  }
   req.pipe(upstream);
 }
 function rejectUpgrade(socket, status = 401) {

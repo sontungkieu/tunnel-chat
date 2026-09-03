@@ -86,10 +86,11 @@ tasks. Keep the Windows app open and the machine awake for desktop access.
 
 The browser component lives in [`chatgpt-web/`](chatgpt-web/README.md), with its own
 profile, password, process and HTTP/WebSocket transport. It does not share Codex
-credentials, history or IPC. Read that setup guide to provision the optional
-browser. Until then, `/chat/` offers login and explains that the browser is
-unavailable; `/codex` remains usable. Starting Tunnel Chat does not download
-a container or log in to ChatGPT.
+credentials, history or IPC. Run `./bin/chat-web-start` to launch the native Windows Chrome backend, then set
+`CHAT_WEB_UPSTREAM=http://127.0.0.1:3000` and run `./bin/restart-gateway`.
+The browser profile stays on D: and you log in once in that Chrome window on the
+personal machine. No Docker is required. See the component guide for lifecycle,
+input controls and limits. `/codex` continues using its existing app bridge.
 
 `./bin/start` creates `.secrets/chatgpt-web.password` privately if missing. Read it
 on the personal machine and enter it on `/chat/`; this is separate from OpenAI
@@ -232,7 +233,7 @@ source, not chat history or credentials. Back up the SQLite DB before migrations
 ```bash
 uv run --frozen python -m unittest discover -s tests -v
 node tests/test_shared_transport.js
-node --test tests/test_desktop_ipc.cjs tests/test_gateway.cjs
+node --test tests/test_desktop_ipc.cjs tests/test_gateway.cjs tests/test_native_browser.cjs
 ```
 
 Tests cover migration, backend isolation, attachment ownership, operation
