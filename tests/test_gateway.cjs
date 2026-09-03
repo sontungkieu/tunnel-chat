@@ -124,6 +124,37 @@ test('root routes to ChatGPT, separate auth gates and credential stripping in bo
   })).status, 200);
 });
 
+test('auth forms retain same-origin metadata while null and foreign origins stay blocked', async t => {
+  const f = await fixture(t);
+  const form = await request(f.base, '/chat/');
+  assert.equal(form.headers['referrer-policy'], 'same-origin');
+  assert.match(form.body, /method="post" action="\/chat\/_auth\/login"/);
+  for (const origin of ['null', 'https://unrelated.example']) {
+    assert.equal((await f.login(PASSWORD, { origin })).status, 403);
+  }
+  const wrong = await f.login('wrong');
+  assert.equal(wrong.status, 401);
+  assert.equal(wrong.headers['referrer-policy'], 'same-origin');
+  assert.match(wrong.body, /Mật khẩu truy cập chưa đúng/);
+  const cookie = await f.cookie();
+  const session = await request(f.base, '/chat/_auth/session', { headers: { cookie } });
+  assert.equal(session.status, 200);
+  assert.equal(session.headers['referrer-policy'], 'same-origin');
+  assert.match(session.body, /method="post" action="\/chat\/_auth\/logout"/);
+  for (const origin of ['null', 'https://unrelated.example']) {
+    const rejected = await request(f.base, '/chat/_auth/logout', {
+      method: 'POST', headers: { cookie, origin },
+    });
+    assert.equal(rejected.status, 403);
+    assert.equal((await request(f.base, '/chat/_auth/session', { headers: { cookie } })).status, 200);
+  }
+  const logout = await request(f.base, '/chat/_auth/logout', {
+    method: 'POST', headers: { cookie, origin: f.base },
+  });
+  assert.equal(logout.status, 303);
+  assert.equal((await request(f.base, '/chat/_auth/session', { headers: { cookie } })).status, 401);
+});
+
 test('login rejects cross-origin, wrong password, oversized input and rate limits failures', async t => {
   const f = await fixture(t);
   assert.equal((await f.login(PASSWORD, { origin: 'https://unrelated.example' })).status, 403);

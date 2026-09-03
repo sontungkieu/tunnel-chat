@@ -20,7 +20,8 @@ function page(res, status, message, form = false) {
     '<p><a href="/codex">Mở Codex</a> · <a href="/chat/_auth/session">Phiên truy cập web</a></p></main></html>';
   res.writeHead(status, {
     'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
-    'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
+    // Native form POSTs need their same-origin metadata; no-referrer makes Origin null.
+    'referrer-policy': 'same-origin', 'x-content-type-options': 'nosniff',
     'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   });
   res.end(body);
