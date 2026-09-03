@@ -96,6 +96,10 @@ input controls and limits. `/codex` continues using its existing app bridge.
 on the personal machine and enter it on `/chat/`; this is separate from OpenAI
 and Codex credentials. A browser session expires after eight hours by default.
 Use `/chat/_auth/session` to log out; password changes require a gateway restart.
+If Google rejects sign-in in the streaming browser, close its Chrome window and
+run `./bin/chat-web-login` for local manual sign-in with streaming paused. After
+signing in, close that window and run `./bin/chat-web-start`; see the component
+guide for details.
 
 ## Desktop tasks: Dynamic Windows / WSL
 

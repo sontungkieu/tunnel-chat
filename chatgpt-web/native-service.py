@@ -34,7 +34,10 @@ def main():
             if (proc / "cwd").resolve() != ROOT or str(ROOT / "chatgpt-web/native-server.cjs") not in args:
                 raise RuntimeError("PID does not belong to this checkout's native browser bridge")
             pid = candidate
-    if sys.argv[1:] == ["stop"]:
+    action = sys.argv[1:]
+    if action not in (["start"], ["stop"], ["login"]):
+        raise RuntimeError("Usage: native-service.py start|stop|login")
+    if action in (["stop"], ["login"]):
         if pid:
             os.kill(pid, signal.SIGTERM)
             for _ in range(50):
@@ -45,7 +48,13 @@ def main():
             else:
                 raise RuntimeError("Native browser bridge did not stop")
         pid_file.unlink(missing_ok=True)
-        print("Browser streaming stopped; Chrome and its login remain open.")
+        print("Browser streaming stopped; Chrome and its login remain open.", flush=True)
+        if action == ["login"]:
+            script = subprocess.check_output([
+                "wslpath", "-w", str(ROOT / "chatgpt-web/native-login.cjs")
+            ], text=True).strip()
+            browser = config.get("CHAT_WEB_BROWSER_BIN", r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+            raise SystemExit(subprocess.call(["/mnt/c/Program Files/nodejs/node.exe", script, state_root, browser]))
         return
     if pid:
         launch_windows(config_path)

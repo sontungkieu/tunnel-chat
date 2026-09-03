@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { EventEmitter, once } = require('node:events');
+const { browserArgs } = require('../chatgpt-web/native-browser.cjs');
 const { inputCommand, CDP } = require('../chatgpt-web/native-protocol.cjs');
 const { createNativeServer, Driver } = require('../chatgpt-web/native-server.cjs');
 
@@ -76,4 +77,17 @@ test('private driver channel requires its own capability and delivers each comma
   await fetch(base + '/__driver/event', {method:'POST',headers,body:JSON.stringify({id:command.id,ok:true})});
   await action;
   assert.equal(driver.pending.size, 0);
+});
+
+test('manual login uses the same owned profile without automation or an app window', () => {
+  const profile = 'D:\\dedicated browser\\profile';
+  const manual = browserArgs(profile, { manualLogin: true, start: 'https://unrelated.example' });
+  const stream = browserArgs(profile);
+  assert.ok(manual.includes('--user-data-dir=' + profile));
+  assert.ok(stream.includes('--user-data-dir=' + profile));
+  assert.ok(manual.includes('--new-window'));
+  assert.equal(manual.at(-1), 'https://chatgpt.com/');
+  assert.ok(manual.every(arg => !/debugging|automation|headless|--app=/.test(arg)));
+  assert.ok(stream.includes('--remote-debugging-port=0'));
+  assert.ok(stream.includes('--remote-debugging-address=127.0.0.1'));
 });

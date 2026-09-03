@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { CDP, inputCommand } = require('./native-protocol.cjs');
+const { ownedProfile, browserArgs, endpoint } = require('./native-browser.cjs');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let cdp, viewport = { width: 1280, height: 900 }, closing = false, pendingFrame, lastFrame = 0;
@@ -26,26 +27,9 @@ async function channel(route, options = {}) {
   if (!response.ok) throw new Error('Local bridge unavailable');
   return response.json();
 }
-async function endpoint(profile) {
-  try {
-    const [port, browserPath] = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').trim().split(/\r?\n/);
-    if (!/^\d+$/.test(port) || !browserPath.startsWith('/devtools/browser/')) return null;
-    const origin = 'http://127.0.0.1:' + port;
-    const response = await fetch(origin + '/json/version', { signal: AbortSignal.timeout(1500) });
-    const version = await response.json();
-    if (new URL(version.webSocketDebuggerUrl).pathname !== browserPath) return null;
-    return origin;
-  } catch { return null; }
-}
 async function connect() {
   if (process.platform !== 'win32') throw new Error('Native driver requires Windows Node');
-  const root = path.resolve(process.env.CHAT_WEB_NATIVE_ROOT || 'D:\\dev\\codex\\tunnel-chat\\chatgpt-web\\native');
-  if (!/^[D-Z]:\\/i.test(root) || root.length < 12) throw new Error('Use a dedicated browser directory on D: or another data drive');
-  const profile = path.join(root, 'profile');
-  const marker = path.join(root, 'tunnel-chat-native.json');
-  if (fs.existsSync(profile) && !fs.existsSync(marker)) throw new Error('Refusing to use an existing unowned browser profile');
-  fs.mkdirSync(profile, { recursive: true });
-  if (!fs.existsSync(marker)) fs.writeFileSync(marker, JSON.stringify({ purpose: 'tunnel-chat-browser', version: 1 }));
+  const { root, profile } = ownedProfile(process.env.CHAT_WEB_NATIVE_ROOT || 'D:\\dev\\codex\\tunnel-chat\\chatgpt-web\\native');
   let origin = await endpoint(profile);
   if (!origin) {
     const browser = process.env.CHAT_WEB_BROWSER_BIN || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
@@ -54,15 +38,12 @@ async function connect() {
     const url = new URL(start);
     if (url.origin !== 'https://chatgpt.com' && !(url.hostname === '127.0.0.1' && process.env.CHAT_WEB_CANARY === '1'))
       throw new Error('Unsupported startup page');
-    const child = spawn(browser, ['--user-data-dir=' + profile, '--remote-debugging-port=0',
-      '--remote-debugging-address=127.0.0.1', '--no-first-run', '--no-default-browser-check',
-      '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding', '--window-size=1280,960', '--app=' + start],
+    const child = spawn(browser, browserArgs(profile, { start }),
       { detached: true, stdio: 'ignore', windowsHide: false });
     child.on('error', () => emit({ event: 'status', ready: false, message: 'Không mở được Chrome trên Windows.' }));
     child.unref();
     for (let i = 0; i < 60 && !origin; i++) { await delay(500); origin = await endpoint(profile); }
-    if (!origin) throw new Error('Browser did not expose its local control endpoint');
+    if (!origin) throw new Error('Close the manual-login Chrome window, then run bin/chat-web-start again');
   }
   const pages = await (await fetch(origin + '/json/list', { signal: AbortSignal.timeout(5000) })).json();
   const savedId = path.join(root, 'target-id.txt');

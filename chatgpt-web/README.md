@@ -29,6 +29,27 @@ access sessions, while the browser login and the Codex backend remain intact.
 The existing deployment keeps /codex for the app's Codex tasks, /codex/cli for
 legacy CLI sessions and /queue for the manual queue. / redirects to /chat/.
 
+## Manual sign-in if Google rejects the streaming browser
+
+Google may reject browsers controlled by automation with "This browser or app
+may not be secure". The streaming Chrome uses DevTools; sign in locally in a
+normal Chrome window with streaming paused:
+
+1. Close the dedicated Chrome window and any Google sign-in popup.
+2. Run `./bin/chat-web-login`. It stops the web bridge and opens the same owned
+   profile in normal Chrome, without a debugging endpoint or app-window mode.
+3. Sign into ChatGPT yourself on the personal PC. Finish any Google/MFA steps
+   there. Then close that Chrome window and run `./bin/chat-web-start`.
+
+The login command does not read or transfer cookies, passwords or tokens. It
+leaves the gateway, tunnel and Codex services running. It refuses to reuse a
+still-running debugging browser; closing Chrome first is required to change
+launch modes. Google may still require additional verification; successful
+sign-in cannot be guaranteed or checked by the launcher. No detection flags or
+account security settings are disabled.
+
+See [Google's supported-browser sign-in guidance](https://support.google.com/accounts/answer/7675428?hl=en).
+
 ## Operation and settings
 
 - Click the streamed page to use the mouse, keyboard and wheel.
