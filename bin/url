@@ -20,4 +20,4 @@ elif [ -n "${PUBLIC_URL:-}" ]; then
 elif [ -f run/cloudflared.pid ] && [ -f run/cloudflared.url ] && kill -0 "$(cat run/cloudflared.pid)" 2>/dev/null; then
     base="$(tr -d '\n' < run/cloudflared.url)/"
 fi
-printf '%s%s?token=%s\n' "${base%/}" "$path" "$CHAT_ACCESS_TOKEN"
+printf '%s%s#token=%s\n' "${base%/}" "$path" "$CHAT_ACCESS_TOKEN"

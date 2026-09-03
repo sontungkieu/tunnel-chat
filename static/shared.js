@@ -35,8 +35,8 @@
       for (let attempt = 1; attempt <= attempts; attempt += 1) {
         let response;
         try {
-          const query = new URLSearchParams({token, p: encodePayload(payload)});
-          response = await fetch(`${apiBase}/${path}?${query.toString()}`, {cache: "no-store"});
+          const query = new URLSearchParams({p: encodePayload(payload)});
+          response = await fetch(`${apiBase}/${path}?${query.toString()}`, {cache: "no-store", headers: {"x-chat-token": token}});
         } catch (error) {
           lastError = error instanceof Error ? error : new Error(String(error));
           if (attempt === attempts) throw lastError;
@@ -123,41 +123,79 @@
     return await options.rpc(paths.finish, {upload_id: uploadId}, {attempts: 1});
   }
 
+  function accessToken() {
+    const fragment = new URLSearchParams(location.hash.slice(1));
+    const query = new URLSearchParams(location.search);
+    // Migrate old links/storage once, then remove the credential from the address bar.
+    let token = fragment.get("token") || query.get("token") ||
+      sessionStorage.getItem("tunnelChatToken") || localStorage.getItem("fixChatToken") || "";
+    localStorage.removeItem("fixChatToken");
+    query.delete("token");
+    fragment.delete("token");
+    history.replaceState(null, "", location.pathname + (query.size ? "?" + query : "") +
+      (fragment.size ? "#" + fragment : ""));
+    if (!token) token = prompt("Access token") || "";
+    if (token) sessionStorage.setItem("tunnelChatToken", token);
+    return token;
+  }
+
+  async function download(url, token) {
+    const response = await fetch(url, {headers: {"x-chat-token": token}, cache: "no-store"});
+    if (!response.ok) throw new Error(await response.text());
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") || "")?.[1] || "repo.zip";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+  }
+
   function startLiveUpdates(options) {
-    let pollTimer = null;
-    let source = null;
-    const setPolling = milliseconds => {
-      if (pollTimer) clearInterval(pollTimer);
-      pollTimer = setInterval(options.poll, milliseconds);
-    };
-    setPolling(options.fastPollMs || 2500);
-    if (typeof EventSource !== "undefined") {
-      try {
-        const query = new URLSearchParams({token: options.token});
-        source = new EventSource(`/events?${query.toString()}`);
-        source.onopen = () => {
-          if (options.onState) options.onState("connecting");
-        };
-        source.onmessage = () => {
-          setPolling(options.slowPollMs || 15000);
-          if (options.onState) options.onState("live");
-          options.onUpdate();
-        };
-        source.onerror = () => {
-          setPolling(options.fastPollMs || 2500);
-          if (options.onState) options.onState("polling");
-        };
-      } catch (error) {
-        if (options.onState) options.onState("polling");
+    const controller = new AbortController();
+    let pollTimer = setInterval(options.poll, options.fastPollMs || 2500);
+    const setPolling = ms => {clearInterval(pollTimer); pollTimer = setInterval(options.poll, ms);};
+    // Fetch streams support the auth header; native EventSource does not.
+    (async () => {
+      while (!controller.signal.aborted) {
+        try {
+          const response = await fetch("/events", {headers: {"x-chat-token": options.token},
+            cache: "no-store", signal: controller.signal});
+          if (!response.ok || !response.body) throw new Error("Stream unavailable");
+          const reader = response.body.getReader();
+          try {
+            const decoder = new TextDecoder();
+            let buffer = "";
+            while (!controller.signal.aborted) {
+              const {value, done} = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, {stream: true});
+              let boundary;
+              while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+                const event = buffer.slice(0, boundary);
+                buffer = buffer.slice(boundary + 2);
+                if (event.includes("data:")) {
+                  setPolling(options.slowPollMs || 15000);
+                  options.onState?.("live");
+                  options.onUpdate();
+                }
+              }
+              if (buffer.length > 65536) throw new Error("Invalid event stream");
+            }
+          } finally { await reader.cancel().catch(() => {}); }
+        } catch (error) {
+          if (controller.signal.aborted) break;
+        }
+        setPolling(options.fastPollMs || 2500);
+        options.onState?.("polling");
+        await sleep(2500);
       }
-    }
-    return () => {
-      if (pollTimer) clearInterval(pollTimer);
-      if (source) source.close();
-    };
+    })();
+    return () => {clearInterval(pollTimer); controller.abort();};
   }
 
   global.RLCSDTransport = {
+    accessToken,
+    download,
     createRpc,
     uploadBlob,
     startLiveUpdates,

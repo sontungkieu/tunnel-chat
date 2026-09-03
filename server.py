@@ -10,6 +10,8 @@ import os
 import re
 import secrets
 import signal
+import shutil
+import stat
 import sqlite3
 import subprocess
 import sys
@@ -23,6 +25,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+import desktop
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -97,6 +101,9 @@ def load_config() -> dict[str, str]:
         "codex_bin": merged.get("CODEX_BIN", DEFAULT_CODEX_BIN),
         "codex_repos": merged.get("CODEX_REPOS", os.pathsep.join(DEFAULT_CODEX_REPOS)),
         "codex_home": merged.get("CODEX_HOME", "/home/tung/.codex"),
+        "desktop_enabled": merged.get("DESKTOP_ENABLED", "0"),
+        "desktop_node": merged.get("DESKTOP_NODE", ""),
+        "desktop_staging_root": merged.get("DESKTOP_STAGING_ROOT", r"D:\dev\codex\tunnel-chat\attachments"),
         "upload_chunk_bytes": merged.get("UPLOAD_CHUNK_BYTES", str(DEFAULT_UPLOAD_CHUNK_BYTES)),
         "upload_concurrency": merged.get("UPLOAD_CONCURRENCY", str(DEFAULT_UPLOAD_CONCURRENCY)),
         "upload_retry_limit": merged.get("UPLOAD_RETRY_LIMIT", str(DEFAULT_UPLOAD_RETRY_LIMIT)),
@@ -397,6 +404,7 @@ def connect() -> sqlite3.Connection:
         except sqlite3.OperationalError as exc:
             if "duplicate column" not in str(exc).lower():
                 raise
+    desktop.init_schema(conn)
     conn.commit()
     return conn
 
@@ -805,38 +813,73 @@ def git_visible_files(repo_path: str) -> list[str]:
     return [file for file in files if file and not file.startswith(".git/")]
 
 
-def fallback_visible_files(repo_path: str) -> list[str]:
-    root = Path(repo_path)
-    skipped_dirs = {".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", ".pytest_cache"}
-    files: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in skipped_dirs]
-        for filename in filenames:
-            path = Path(dirpath) / filename
-            try:
-                rel = path.relative_to(root).as_posix()
-            except ValueError:
-                continue
-            files.append(rel)
-    return files
+def safe_export_file(root: Path, rel: str) -> bool:
+    relative = Path(rel)
+    if relative.is_absolute() or ".." in relative.parts:
+        return False
+    forbidden = {".git", ".secrets", "secrets", ".ssh", ".aws", ".codex",
+                 "data", "logs", "run", "node_modules", "__pycache__", ".venv"}
+    parts = [part.lower() for part in relative.parts]
+    if any(part in forbidden or part.startswith(".env") or part.startswith(".venv") for part in parts):
+        return False
+    if relative.name.lower() in {"auth.json", "credentials.json", "credentials", "id_rsa", "id_ed25519"}:
+        return False
+    if relative.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}:
+        return False
+    path = root
+    for part in relative.parts:
+        path = path / part
+        if path.is_symlink():
+            return False
+    return path.is_file() and path.resolve().is_relative_to(root)
+
+
+def open_export_file(root: Path, rel: str):
+    # Open every component relative to a directory fd, refusing symlinks even if
+    # the checkout changes between enumeration and reading.
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise ValueError("Safe ZIP export requires Linux/WSL")
+    parts = Path(rel).parts
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory = os.open(root, flags)
+    try:
+        for part in parts[:-1]:
+            next_directory = os.open(part, flags, dir_fd=directory)
+            os.close(directory)
+            directory = next_directory
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            raise ValueError("ZIP export only includes regular files")
+        return os.fdopen(fd, "rb")
+    finally:
+        os.close(directory)
 
 
 def create_repo_zip(repo_path: str) -> tuple[Path, str]:
     repo = require_allowed_repo(repo_path)
-    filename = repo_zip_filename(repo)
-    files = git_visible_files(repo) or fallback_visible_files(repo)
+    root = Path(repo).resolve()
+    check = subprocess.run(["git", "-C", repo, "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True)
+    if check.returncode or Path(check.stdout.strip()).resolve() != root:
+        raise ValueError("ZIP export requires an allowed Git repository root")
+    files = [rel for rel in git_visible_files(repo) if safe_export_file(root, rel)]
     if not files:
-        raise ValueError(f"no files to zip in {repo}")
-    fd, tmp_name = tempfile.mkstemp(prefix="rlcsd-repo-", suffix=".zip")
+        raise ValueError("No exportable files in this repository")
+    filename = repo_zip_filename(repo)
+    fd, tmp_name = tempfile.mkstemp(prefix="tunnel-chat-repo-", suffix=".zip")
     os.close(fd)
     zip_path = Path(tmp_name)
-    root = Path(repo)
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-        for rel in files:
-            path = root / rel
-            if not path.is_file():
-                continue
-            archive.write(path, arcname=f"{Path(filename).stem}/{rel}")
+    try:
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            for rel in files:
+                if safe_export_file(root, rel):
+                    with open_export_file(root, rel) as source:
+                        with archive.open(f"{Path(filename).stem}/{rel}", "w") as target:
+                            shutil.copyfileobj(source, target, length=1024 * 1024)
+    except Exception:
+        zip_path.unlink(missing_ok=True)
+        raise
     return zip_path, filename
 
 
@@ -862,7 +905,7 @@ def get_codex_chat(chat_id: int) -> sqlite3.Row | None:
         return conn.execute(
             """
             SELECT id, created_at, updated_at, title, repo_path, codex_session_id,
-                   status, running_pid, process_group, activity, last_error
+                   status, running_pid, process_group, activity, last_error, backend, host_id
             FROM codex_chats
             WHERE id = ?
             """,
@@ -875,8 +918,9 @@ def list_codex_chats() -> list[dict[str, object]]:
         rows = conn.execute(
             """
             SELECT id, created_at, updated_at, title, repo_path, codex_session_id,
-                   status, running_pid, process_group, activity, last_error
+                   status, running_pid, process_group, activity, last_error, backend, host_id
             FROM codex_chats
+            WHERE backend = 'cli-wsl'
             ORDER BY updated_at DESC, id DESC
             LIMIT 80
             """
@@ -1216,7 +1260,7 @@ def add_codex_prompt_chunk(upload_id: int, chunk_index: int, body: str) -> None:
         conn.commit()
 
 
-def finish_codex_prompt_upload(upload_id: int) -> tuple[int, int]:
+def finish_codex_prompt_upload(upload_id: int, submit=None) -> tuple[int, int]:
     with connect() as conn:
         session = conn.execute(
             """
@@ -1252,7 +1296,7 @@ def finish_codex_prompt_upload(upload_id: int) -> tuple[int, int]:
         conn.execute("DELETE FROM codex_prompt_uploads WHERE id = ?", (upload_id,))
         conn.commit()
     chat_id = int(session["chat_id"])
-    start_codex_turn(chat_id, prompt, parse_id_list(session["attachment_ids"]))
+    (submit or start_codex_turn)(chat_id, prompt, parse_id_list(session["attachment_ids"]))
     return chat_id, len(prompt)
 
 
@@ -1331,7 +1375,7 @@ def terminate_process_group(process_group: int, proc: subprocess.Popen[str] | No
 def reconcile_codex_runs() -> int:
     with connect() as conn:
         rows = conn.execute(
-            "SELECT id, process_group FROM codex_chats WHERE status = 'running'"
+            "SELECT id, process_group FROM codex_chats WHERE status = 'running' AND backend = 'cli-wsl'"
         ).fetchall()
         for row in rows:
             process_group = int(row["process_group"] or 0)
@@ -1360,6 +1404,8 @@ def start_codex_turn(chat_id: int, prompt: str, attachment_ids: list[int] | None
     chat = get_codex_chat(chat_id)
     if chat is None:
         raise ValueError(f"unknown codex chat #{chat_id}")
+    if chat["backend"] != "cli-wsl":
+        raise ValueError("Use the Desktop page for this task")
     get_codex_bin()
     if not Path(str(chat["repo_path"])).is_dir():
         raise ValueError(f"repo directory is missing: {chat['repo_path']}")
@@ -1551,6 +1597,9 @@ def run_codex_turn(chat_id: int, prompt: str, attachment_ids: list[int] | None =
 
 
 def cancel_codex_turn(chat_id: int) -> bool:
+    chat = get_codex_chat(chat_id)
+    if chat is None or chat["backend"] != "cli-wsl":
+        raise ValueError("Use the Desktop page to stop a desktop turn")
     with CODEX_RUNNERS_LOCK:
         proc = CODEX_RUNNERS.get(chat_id)
     if proc is None or proc.poll() is not None:
@@ -1895,10 +1944,11 @@ def html_page() -> str:
   </style>
 </head>
 <body>
+  <nav style="padding:8px 16px"><a href="/desktop">Desktop app</a> · <a href="/codex">WSL CLI</a> · <a href="/">Fix queue</a></nav>
   <header>
     <h1>RLCSD Fix Chat</h1>
     <div>
-      <a href="/codex">Codex mode</a>
+      <a href="/desktop">Desktop app</a> · <a href="/codex">WSL CLI</a>
       <button id="downloadRepo" type="button">Download zip</button>
       <span id="status">connecting</span>
     </div>
@@ -1915,14 +1965,7 @@ def html_page() -> str:
   </footer>
   <script src="/static/shared.js"></script>
   <script>
-    const params = new URLSearchParams(location.search);
-    const tokenFromUrl = params.get("token");
-    if (tokenFromUrl) localStorage.setItem("fixChatToken", tokenFromUrl);
-    let token = localStorage.getItem("fixChatToken") || "";
-    if (!token) {
-      token = prompt("Access token") || "";
-      localStorage.setItem("fixChatToken", token);
-    }
+    const token = RLCSDTransport.accessToken();
     const messagesEl = document.getElementById("messages");
     const statusEl = document.getElementById("status");
     const inputEl = document.getElementById("input");
@@ -2257,7 +2300,7 @@ def html_page() -> str:
 
     async function refresh() {
       try {
-        const r = await fetch(`${apiBase}/list?token=${encodeURIComponent(token)}`);
+        const r = await fetch(`${apiBase}/list`, {headers: {"x-chat-token": token}, cache: "no-store"});
         if (!r.ok) throw new Error(await r.text());
         const data = await r.json();
         const key = messagesKey(data.messages);
@@ -2383,7 +2426,7 @@ def html_page() -> str:
     sendFixEl.onclick = () => post(inputEl.value, {createFix: true});
     document.getElementById("fileButton").onclick = () => fileInputEl.click();
     document.getElementById("downloadRepo").onclick = () => {
-      window.location.href = `/download/repo?token=${encodeURIComponent(token)}`;
+      RLCSDTransport.download("/download/repo", token).catch(error => showNotice(error.message));
     };
     pendingFileEl.addEventListener("click", ev => {
       if (!ev.target.closest(".clear-pending-file")) return;
@@ -2761,6 +2804,7 @@ def codex_page() -> str:
   </style>
 </head>
 <body>
+  <nav style="padding:8px 16px"><a href="/desktop">Desktop app</a> · <a href="/codex">WSL CLI</a> · <a href="/">Fix queue</a></nav>
   <header>
     <h1>RLCSD Codex Mode</h1>
     <div>
@@ -2801,14 +2845,7 @@ def codex_page() -> str:
   </div>
   <script src="/static/shared.js"></script>
   <script>
-    const params = new URLSearchParams(location.search);
-    const tokenFromUrl = params.get("token");
-    if (tokenFromUrl) localStorage.setItem("fixChatToken", tokenFromUrl);
-    let token = localStorage.getItem("fixChatToken") || "";
-    if (!token) {
-      token = prompt("Access token") || "";
-      localStorage.setItem("fixChatToken", token);
-    }
+    const token = RLCSDTransport.accessToken();
     const apiBase = "/c";
     const transportConfig = __TRANSPORT_CONFIG__;
     const uploadChunkBytes = transportConfig.chunkBytes;
@@ -3184,10 +3221,10 @@ def codex_page() -> str:
     document.getElementById("refresh").onclick = () => refreshAll();
     downloadCodexRepoEl.onclick = () => {
       const active = chats.find(chat => Number(chat.id) === Number(activeChatId));
-      const query = new URLSearchParams({token});
+      const query = new URLSearchParams();
       if (active) query.set("chat_id", String(active.id));
       else query.set("repo", repoSelectEl.value);
-      window.location.href = `/download/repo?${query.toString()}`;
+      RLCSDTransport.download(`/download/repo?${query.toString()}`, token).catch(error => showNotice(error.message));
     };
     fileButtonEl.onclick = () => fileInputEl.click();
     fileInputEl.onchange = async () => {
@@ -3220,6 +3257,12 @@ def codex_page() -> str:
 
 
 class ChatHandler(BaseHTTPRequestHandler):
+    def end_headers(self) -> None:
+        self.send_header("referrer-policy", "no-referrer")
+        self.send_header("x-content-type-options", "nosniff")
+        self.send_header("x-frame-options", "DENY")
+        super().end_headers()
+
     server_version = "RLCSDChat/0.1"
     protocol_version = "HTTP/1.1"
 
@@ -3233,8 +3276,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         expected = self.server.chat_token  # type: ignore[attr-defined]
         if not expected:
             return False
-        query = parse_qs(urlparse(self.path).query)
-        supplied = self.headers.get("x-chat-token") or query.get("token", [""])[0]
+        supplied = self.headers.get("x-chat-token", "")
         return secrets.compare_digest(str(supplied), str(expected))
 
     def send_json(self, payload: object, status: HTTPStatus = HTTPStatus.OK) -> None:
@@ -3299,11 +3341,31 @@ class ChatHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         raw_path = parsed.path
         path = normalize_api_path(raw_path)
-        if path == "/static/shared.js":
-            static_path = BASE_DIR / "static" / "shared.js"
+        if path in {"/static/shared.js", "/static/desktop.js", "/static/desktop.css"}:
+            static_path = BASE_DIR / "static" / Path(path).name
             data = static_path.read_bytes()
             self.send_response(HTTPStatus.OK)
-            self.send_header("content-type", "text/javascript; charset=utf-8")
+            self.send_header("content-type", "text/css; charset=utf-8" if path.endswith(".css") else "text/javascript; charset=utf-8")
+            self.send_header("cache-control", "no-store")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if raw_path.startswith("/d/"):
+            if not self.auth_ok():
+                self.send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+                return
+            try:
+                result = desktop.dispatch(sys.modules[__name__], raw_path[3:],
+                                          decode_get_payload(parse_qs(parsed.query)))
+                self.send_json(result)
+            except Exception as exc:
+                self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
+            return
+        if path == "/desktop":
+            data = (BASE_DIR / "static" / "desktop.html").read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("content-type", "text/html; charset=utf-8")
             self.send_header("cache-control", "no-store")
             self.send_header("content-length", str(len(data)))
             self.end_headers()

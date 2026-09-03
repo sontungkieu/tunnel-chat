@@ -6,6 +6,27 @@ global.btoa = value => Buffer.from(value, "binary").toString("base64");
 vm.runInThisContext(fs.readFileSync("static/shared.js", "utf8"), {filename: "static/shared.js"});
 
 async function main() {
+  const assert = require("node:assert/strict");
+  let requested;
+  global.fetch = async (url, options) => {
+    requested = {url,options};
+    return {ok:true,json:async()=>({ok:true})};
+  };
+  await RLCSDTransport.createRpc({apiBase:"/d",token:"test-credential"})("list");
+  assert.equal(new URL(requested.url,"http://local").searchParams.has("token"),false);
+  assert.equal(requested.options.headers["x-chat-token"],"test-credential");
+  assert.equal(requested.options.cache,"no-store");
+  const local = new Map([["fixChatToken","old"]]), session = new Map();
+  global.localStorage={getItem:key=>local.get(key),removeItem:key=>local.delete(key)};
+  global.sessionStorage={getItem:key=>session.get(key),setItem:(key,value)=>session.set(key,value)};
+  global.location={pathname:"/desktop",search:"?view=all",hash:"#token=new"};
+  let rewritten;
+  global.history={replaceState:(a,b,url)=>rewritten=url};
+  assert.equal(RLCSDTransport.accessToken(),"new");
+  assert.equal(rewritten,"/desktop?view=all");
+  assert.equal(session.get("tunnelChatToken"),"new");
+  assert.equal(local.has("fixChatToken"),false);
+
   const received = new Set();
   const failedOnce = new Set();
   let active = 0;
