@@ -1,0 +1,28 @@
+.env
+*.env
+.env.local
+*.zip*
+.vscode/
+.venv/
+__pycache__/
+data/*.sqlite3*
+data/codex_attachments/
+logs/*.log
+run/*.pid
+run/*.url
+
+# Local credentials and complete runtime state
+.env.*
+.secrets/
+*.pem
+*.key
+/data/
+/logs/
+/run/
+
+# Development caches
+.venv*/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+    echo "usage: $0 <request-id> [reply text], or pipe reply on stdin" >&2
+    exit 2
+fi
+
+cd "$(dirname "$0")/.."
+request_id="$1"
+shift
+if [ $# -gt 0 ]; then
+    python3 server.py reply "$request_id" "$@"
+else
+    python3 server.py reply "$request_id" --stdin
+fi

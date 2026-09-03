@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+uv run python server.py init-env >/dev/null
+set -a
+source .env.local
+set +a
+
+path="${1:-/}"
+if [[ "$path" != /* ]]; then
+    path="/$path"
+fi
+
+base="http://${HOST:-127.0.0.1}:${PORT:-8787}/"
+if [ -f run/quick-cloudflared.pid ] && [ -f run/quick-cloudflared.url ] && kill -0 "$(cat run/quick-cloudflared.pid)" 2>/dev/null; then
+    base="$(tr -d '\n' < run/quick-cloudflared.url)/"
+elif [ -n "${PUBLIC_URL:-}" ]; then
+    base="${PUBLIC_URL%/}/"
+elif [ -f run/cloudflared.pid ] && [ -f run/cloudflared.url ] && kill -0 "$(cat run/cloudflared.pid)" 2>/dev/null; then
+    base="$(tr -d '\n' < run/cloudflared.url)/"
+fi
+printf '%s%s?token=%s\n' "${base%/}" "$path" "$CHAT_ACCESS_TOKEN"

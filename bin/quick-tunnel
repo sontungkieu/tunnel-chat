@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+uv run python server.py init-env >/dev/null
+
+set -a
+source .env.local
+set +a
+
+mkdir -p logs run
+PID_FILE="run/quick-cloudflared.pid"
+URL_FILE="run/quick-cloudflared.url"
+if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    echo "quick tunnel already running pid=$(cat "$PID_FILE")"
+    [ -f "$URL_FILE" ] && cat "$URL_FILE"
+    exit 0
+fi
+rm -f "$PID_FILE" "$URL_FILE"
+
+CLOUDFLARED=${CLOUDFLARED_BIN:-/home/tung/.local/bin/cloudflared}
+if [ ! -x "$CLOUDFLARED" ]; then
+    echo "cloudflared not found at $CLOUDFLARED" >&2
+    exit 1
+fi
+
+LOCAL_URL="http://127.0.0.1:${PORT:-8787}"
+LOG_FILE="logs/quick-cloudflared.log"
+: > "$LOG_FILE"
+export CLOUDFLARED LOCAL_URL LOG_FILE
+
+uv run python - <<'PY'
+from pathlib import Path
+import os
+import subprocess
+import time
+
+cloudflared = os.environ["CLOUDFLARED"]
+local_url = os.environ["LOCAL_URL"]
+log_file = Path(os.environ["LOG_FILE"])
+cmd = [
+    cloudflared,
+    "tunnel",
+    "--no-autoupdate",
+    "--logfile",
+    str(log_file),
+    "--url",
+    local_url,
+]
+with open(os.devnull, "rb") as stdin, open(os.devnull, "wb") as stdout:
+    proc = subprocess.Popen(
+        cmd,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+Path("run/quick-cloudflared.pid").write_text(str(proc.pid), encoding="utf-8")
+time.sleep(4)
+os.kill(proc.pid, 0)
+PY
+
+uv run python - <<'PY'
+from pathlib import Path
+import re
+import time
+
+log = Path("logs/quick-cloudflared.log")
+url_file = Path("run/quick-cloudflared.url")
+for _ in range(10):
+    text = log.read_text(errors="ignore") if log.exists() else ""
+    matches = re.findall(r"https://[-a-zA-Z0-9.]+\.trycloudflare\.com", text)
+    if matches:
+        url_file.write_text(matches[-1] + "\n", encoding="utf-8")
+        print(matches[-1])
+        raise SystemExit(0)
+    time.sleep(1)
+raise SystemExit("quick tunnel started but no trycloudflare URL appeared in logs")
+PY
