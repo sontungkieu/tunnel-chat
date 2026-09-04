@@ -8,12 +8,15 @@ const sample=()=>({id:ID,title:'test',cwd:'D:\\work',latestModel:'test-model',th
   turns:[{turnId:'turn-1',status:'completed',params:{input:[{type:'text',text:'hello'}]},
     items:[{type:'agentMessage',id:'a',text:'reply'},{type:'reasoning',text:'must not be exported'}]}],requests:[]});
 test('frames survive byte fragmentation and concatenation',()=>{
-  const out=[],d=new Decoder(m=>out.push(m)),bytes=Buffer.concat([frame({a:'tiếng Việt'}),frame({b:2})]);
+  const out=[],progress=[],d=new Decoder(m=>out.push(m),p=>progress.push(p));
+  const bytes=Buffer.concat([frame({a:'tiếng Việt'}),frame({b:2})]);
   for(const byte of bytes)d.push(Buffer.from([byte]));
   assert.deepEqual(out,[{a:'tiếng Việt'},{b:2}]);
+  assert.ok(progress.some(p=>p.receivedBytes<p.totalBytes));
+  assert.ok(progress.some(p=>p.receivedBytes===p.totalBytes));
 });
 test('oversized frames and invalid JSON fail closed',()=>{
-  const h=Buffer.alloc(4);h.writeUInt32LE(100000000);
+  const h=Buffer.alloc(4);h.writeUInt32LE(200000000);
   assert.throws(()=>new Decoder(()=>{}).push(h),/size/);
   assert.throws(()=>new Decoder(()=>{}).push(Buffer.from([2,0,0,0,120,120])));
 });
@@ -35,6 +38,15 @@ test('canonical history is ordered and hidden reasoning is omitted',()=>{
   assert.equal(view.messages.at(-1).text,'reply');
   assert.ok(!JSON.stringify(view).includes('must not be exported'));
   assert.equal(view.cwd,'D:\\work');
+});
+test('projected history stays bounded to the latest 600 messages',()=>{
+  const s=sample();s.turns=Array.from({length:700},(_,i)=>({turnId:`turn-${i}`,status:'completed',
+    params:{input:[{type:'text',text:`message-${i}`}]},items:[]}));
+  const view=projectState(s,1);
+  assert.equal(view.messages.length,600);
+  assert.equal(view.messages[0].text,'message-100');
+  assert.equal(view.messages.at(-1).text,'message-699');
+  assert.equal(view.historyTruncated,true);
 });
 async function fixture(t) {
   let state=sample(),owner='owner',silent=false,denyInitialize=false;const seen=[],sockets=new Set();
@@ -70,6 +82,7 @@ test('follower sends to owner and inherits settings without overriding runtime',
   const f=await fixture(t);
   const state=await f.client.state(ID);
   assert.equal(state.messages[1].text,'reply');
+  assert.ok(f.seen.find(m=>m.method==='thread-follower-load-complete-history').timeoutMs>1000);
   await f.client.act(ID,'send',{text:'next',mode:'start'});
   const sent=f.seen.at(-1);
   assert.equal(sent.method,'thread-follower-start-turn');

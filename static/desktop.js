@@ -7,6 +7,12 @@ const uploads = RLCSDTransport.createRpc({apiBase:"/c",token,retryLimit:1});
 let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
 let snapshot = null, busy = false, polling = false, requestKey = "", messageKey = "";
 let transport = {chunkBytes:6144,concurrency:3,retryLimit:4};
+const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết nối Codex Desktop",
+  cached:"Đang dùng snapshot đã tải",discovering:"Đang tìm tiến trình sở hữu task",
+  "loading-history":"Đang yêu cầu toàn bộ lịch sử",
+  "receiving-history":"Đang nhận snapshot lịch sử", "waiting-snapshot":"Đang chờ snapshot",
+  projecting:"Đang dựng giao diện",complete:"Đã tải xong"};
+const wait=milliseconds=>new Promise(resolve=>setTimeout(resolve,milliseconds));
 function operationId() {
   // crypto.randomUUID is unavailable on an ordinary HTTP tunnel/LAN origin.
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -30,6 +36,19 @@ function updateControls() {
   document.querySelectorAll("#taskList button").forEach(b=>b.disabled=busy);
 }
 function setBusy(value) {busy=value;updateControls();}
+async function loadTask(payload) {
+  const started=await rpc("load/start",payload,{attempts:1});
+  while(true) {
+    const job=await rpc("load/status",{load_id:started.load_id},{attempts:4});
+    if(job.status==="complete") {notice();return job.result;}
+    if(job.status==="error") throw new Error(job.error || "Không tải được task");
+    const progress=job.progress || {};
+    const bytes=progress.totalBytes ? ` · ${Math.round(progress.receivedBytes/1048576)}/${Math.round(progress.totalBytes/1048576)} MiB` : "";
+    const percent=Number.isFinite(progress.percent) ? ` · ${progress.percent}%` : "";
+    notice(`${loadStages[job.stage] || "Đang tải task"}${percent}${bytes} · ${Math.floor(job.elapsed_seconds)} giây`);
+    await wait(750);
+  }
+}
 function textElement(tag,text,className) {
   const element=document.createElement(tag);element.textContent=String(text || "");
   if(className) element.className=className;return element;
@@ -100,9 +119,13 @@ async function list() {
     button.disabled=busy;
     button.onclick=async()=>{
       if(busy) return;
+      setBusy(true);notice();
       active=Number(chat.id);sessionStorage.setItem("desktopActiveChat",String(active));
       snapshot=null;messageKey="";requestKey="";$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
-      updateControls();await list();await refresh();
+      updateControls();
+      try {await list();await refresh();}
+      catch(e) {notice(e.message);}
+      finally {setBusy(false);}
     };
     $("taskList").append(button);
   }
@@ -113,21 +136,30 @@ async function refresh(force=false) {
   if(!active || polling) return;
   polling=true;
   const selected=active;
-  try {const state=await rpc("state",{chat_id:selected,refresh:force});if(selected===active)renderState(state);}
+  try {
+    const state=(force || !snapshot)
+      ? (await loadTask({chat_id:selected,refresh:force})).state
+      : await rpc("state",{chat_id:selected,refresh:false});
+    if(selected===active)renderState(state);
+  }
   catch(e) {snapshot=null;updateControls();$("status").textContent="Mất kết nối";notice(e.message);}
   finally {polling=false;}
 }
 $("linkForm").onsubmit=async event=>{
   event.preventDefault();setBusy(true);notice();
   try {
-    const data=await rpc("link",{thread:$("thread").value});
+    const data=await loadTask({thread:$("thread").value});
     active=data.chat_id;sessionStorage.setItem("desktopActiveChat",String(active));
     messageKey="";requestKey="";renderState(data.state);
     $("files").value="";$("filesLabel").textContent="";await list();
   }catch(e){notice(e.message);}finally{setBusy(false);}
 };
 $("linkButton").onclick=()=>$("linkForm").requestSubmit();
-$("reconnect").onclick=()=>{notice();refresh(true);};
+$("reconnect").onclick=async()=>{
+  if(busy)return;
+  setBusy(true);notice();
+  try {await refresh(true);} finally {setBusy(false);}
+};
 $("files").onchange=()=>{
   const files=Array.from($("files").files);
   if(files.some(f=>f.size>8*1024*1024)) {$("files").value="";notice("Giới hạn mỗi file là 8 MB.");}

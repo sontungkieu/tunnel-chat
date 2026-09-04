@@ -7,7 +7,8 @@ const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
 const {EventEmitter} = require('node:events');
-const MAX_FRAME = 32 * 1024 * 1024;
+const MAX_FRAME = 128 * 1024 * 1024;
+const MAX_PROJECTED_MESSAGES = 600;
 const VERSIONS = {'initialize':0, 'thread-owner-discovery':1,
   'thread-follower-load-complete-history':1, 'thread-follower-start-turn':2,
   'thread-follower-steer-turn':1, 'thread-follower-interrupt-turn':4,
@@ -20,16 +21,35 @@ function frame(message) {
   return Buffer.concat([header, body]);
 }
 class Decoder {
-  constructor(onMessage) { this.buffer = Buffer.alloc(0); this.onMessage = onMessage; }
+  constructor(onMessage, onProgress=()=>{}) {
+    this.chunks=[]; this.length=0; this.expected=null;
+    this.onMessage=onMessage; this.onProgress=onProgress;
+  }
+  take(size) {
+    if (size > this.length) throw Error('Incomplete IPC frame');
+    const output=Buffer.allocUnsafe(size);let offset=0;
+    while(offset<size) {
+      const chunk=this.chunks[0],count=Math.min(chunk.length,size-offset);
+      chunk.copy(output,offset,0,count);offset+=count;this.length-=count;
+      if(count===chunk.length)this.chunks.shift();else this.chunks[0]=chunk.subarray(count);
+    }
+    return output;
+  }
   push(chunk) {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    while (this.buffer.length >= 4) {
-      const size = this.buffer.readUInt32LE();
-      if (size < 2 || size > MAX_FRAME) throw Error('Unsupported IPC frame size');
-      if (this.buffer.length < size + 4) break;
-      const message = JSON.parse(this.buffer.subarray(4, size + 4).toString('utf8'));
-      this.buffer = this.buffer.subarray(size + 4);
-      this.onMessage(message);
+    if (!Buffer.isBuffer(chunk) || !chunk.length) return;
+    this.chunks.push(chunk);this.length+=chunk.length;
+    while (true) {
+      if(this.expected===null) {
+        if(this.length<4)return;
+        const size=this.take(4).readUInt32LE();
+        if(size<2 || size>MAX_FRAME)throw Error(`Unsupported IPC frame size: ${size} bytes`);
+        this.expected=size;
+      }
+      const received=Math.min(this.length,this.expected);
+      this.onProgress({receivedBytes:received,totalBytes:this.expected});
+      if(this.length<this.expected)return;
+      const message=JSON.parse(this.take(this.expected).toString('utf8'));
+      this.expected=null;this.onMessage(message);
     }
   }
 }
@@ -82,21 +102,26 @@ function textInput(input) {
 function projectState(state, revision) {
   if (!state || typeof state.id !== 'string') throw Error('Unsupported desktop state');
   const turns = turnsOf(state);
-  const messages = [];
+  const messages = [];let messageCount=0;
+  const addMessage=message=>{
+    messageCount+=1;
+    if(messages.length===MAX_PROJECTED_MESSAGES)messages.shift();
+    messages.push(message);
+  };
   for (const turn of turns) {
     const user = textInput(turn.params?.input);
-    if (user) messages.push({id:turn.turnId+':user',role:'user',text:user});
+    if (user) addMessage({id:turn.turnId+':user',role:'user',text:user});
     for (const item of turn.items || []) {
       // Do not export reasoning, ambient context, configuration, or arbitrary tool payloads.
       if (item.type === 'agentMessage' || item.type === 'assistantMessage')
-        messages.push({id:item.id,role:'assistant',text:item.text || '',phase:item.phase || ''});
+        addMessage({id:item.id,role:'assistant',text:item.text || '',phase:item.phase || ''});
       else if (item.type === 'steeringUserMessage' || item.type === 'userMessage') {
         const text = item.text || textInput(item.content || item.input);
-        if (text) messages.push({id:item.id,role:'user',text});
+        if (text) addMessage({id:item.id,role:'user',text});
       } else if (item.type === 'commandExecution')
-        messages.push({id:item.id,role:'tool',text:String(item.command || ''),status:item.status});
+        addMessage({id:item.id,role:'tool',text:String(item.command || ''),status:item.status});
       else if (item.type === 'fileChange')
-        messages.push({id:item.id,role:'tool',text:'File changes',status:item.status});
+        addMessage({id:item.id,role:'tool',text:'File changes',status:item.status});
     }
   }
   const active = [...turns].reverse().find(t=>t.status==='inProgress');
@@ -106,13 +131,15 @@ function projectState(state, revision) {
     cwd:state.cwd || '',backend:'desktop',hostId:'local',
     model:state.latestModel || '',status:running?'running':'idle',
     activeTurnId:running ? active?.turnId || null : null,revision,
-    messages:messages.slice(-600),
+    messages,
     requests:(state.requests || []).map(r=>({id:r.id,method:r.method,params:r.params})),
-    historyTruncated:messages.length>600};
+    historyTruncated:messageCount>MAX_PROJECTED_MESSAGES};
 }
 class DesktopClient extends EventEmitter {
-  constructor({socketFactory=()=>net.createConnection('\\\\.\\pipe\\codex-ipc'),timeout=15000}={}) {
+  constructor({socketFactory=()=>net.createConnection('\\\\.\\pipe\\codex-ipc'),timeout=15000,
+    historyTimeout=180000,snapshotTimeout=30000}={}) {
     super(); this.socketFactory=socketFactory; this.timeout=timeout;
+    this.historyTimeout=historyTimeout;this.snapshotTimeout=snapshotTimeout;
     this.pending=new Map(); this.tasks=new Map(); this.connecting=null; this.socket=null; this.clientId=null;
   }
   async connect() {
@@ -125,7 +152,7 @@ class DesktopClient extends EventEmitter {
   }
   async open() {
     const socket=this.socketFactory(); this.socket=socket;
-    const decoder=new Decoder(m=>this.receive(m));
+    const decoder=new Decoder(m=>this.receive(m),progress=>this.emit('frame-progress',progress));
     socket.on('data',c=>{try {decoder.push(c);} catch(e) {this.disconnect(e);}});
     socket.on('error',e=>{if(this.socket===socket)this.disconnect(Error('Desktop IPC unavailable: '+e.message));});
     socket.on('close',()=>{if(this.socket===socket)this.disconnect(Error('Desktop app disconnected'));});
@@ -151,17 +178,17 @@ class DesktopClient extends EventEmitter {
     if (!this.socket || this.socket.destroyed) throw Error('Desktop app is disconnected');
     this.socket.write(frame(message));
   }
-  request(method, params, targetClientId) {
+  request(method, params, targetClientId, timeout=this.timeout) {
     if (!(method in VERSIONS)) return Promise.reject(Error('Unsupported desktop method'));
     const requestId=crypto.randomUUID();
     return new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{
         this.pending.delete(requestId);
         reject(Error('Desktop request timed out; outcome unknown. Refresh before resending.'));
-      },this.timeout+1000);
+      },timeout+1000);
       this.pending.set(requestId,{resolve,reject,timer});
       try { this.send({type:'request',requestId,sourceClientId:this.clientId || undefined,
-        version:VERSIONS[method],method,params,targetClientId,timeoutMs:this.timeout}); }
+        version:VERSIONS[method],method,params,targetClientId,timeoutMs:timeout}); }
       catch(e) {clearTimeout(timer);this.pending.delete(requestId);reject(e);}
     });
   }
@@ -203,29 +230,47 @@ class DesktopClient extends EventEmitter {
     } catch(e) {task.state=null;task.error=e.message;}
     this.emit('change',p.conversationId);
   }
-  async watch(id, refresh=false) {
+  async watch(id, refresh=false, onProgress=()=>{}) {
     if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) throw Error('Invalid task ID');
+    onProgress({stage:'connecting'});
     await this.connect();
     let task=this.tasks.get(id);
-    if (task?.state && !refresh) return task;
+    if (task?.state && !refresh) {onProgress({stage:'cached'});return task;}
     if (task) this.following(id,task.owner,false);
+    onProgress({stage:'discovering'});
     const discovery=await this.request('thread-owner-discovery',{hostId:'local',conversationId:id});
     const owner=discovery.handledByClientId;
     if (!owner || discovery.result?.supportsUntrustedAppInput!==true)
       throw Error('Desktop task owner does not support this client. Open the task in the Windows app.');
     task={owner,state:null,revision:0,error:null};this.tasks.set(id,task);
     this.following(id,owner);
-    await this.request('thread-follower-load-complete-history',{conversationId:id},owner);
-    if (!task.state) await new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>{this.off('change',check);reject(Error(task.error || 'No desktop snapshot received'));},3000);
-      const check=()=>{if(task.state || task.error){clearTimeout(timer);this.off('change',check);resolve();}};
-      this.on('change',check);check();
-    });
+    let lastProgress=0;
+    const frameProgress=progress=>{
+      if(progress.totalBytes<1024*1024)return;
+      const now=Date.now();
+      if(progress.receivedBytes<progress.totalBytes && now-lastProgress<200)return;
+      lastProgress=now;onProgress({stage:'receiving-history',...progress,
+        percent:Math.min(100,Math.floor(progress.receivedBytes*100/progress.totalBytes))});
+    };
+    this.on('frame-progress',frameProgress);
+    try {
+      onProgress({stage:'loading-history'});
+      await this.request('thread-follower-load-complete-history',{conversationId:id},owner,this.historyTimeout);
+      if (!task.state) {
+        onProgress({stage:'waiting-snapshot'});
+        await new Promise((resolve,reject)=>{
+          const timer=setTimeout(()=>{this.off('change',check);reject(Error(task.error || 'No desktop snapshot received'));},this.snapshotTimeout);
+          const check=()=>{if(task.state || task.error){clearTimeout(timer);this.off('change',check);resolve();}};
+          this.on('change',check);check();
+        });
+      }
+    } finally {this.off('frame-progress',frameProgress);}
     if (!task.state) throw Error(task.error || 'Desktop snapshot unavailable');
     return task;
   }
-  async state(id, refresh=false) {
-    const task=await this.watch(id,refresh);return projectState(task.state,task.revision);
+  async state(id, refresh=false, onProgress=()=>{}) {
+    const task=await this.watch(id,refresh,onProgress);onProgress({stage:'projecting'});
+    return projectState(task.state,task.revision);
   }
   async act(id, action, data) {
     const task=await this.watch(id);
@@ -309,7 +354,8 @@ async function main() {
         if (line.length>16*1024*1024) throw Error('Bridge command too large');
         command=JSON.parse(line);let result;
         if (command.action==='stage') result=stageAttachment(command.data);
-        else if (command.action==='state') result=await client.state(command.threadId,!!command.refresh);
+        else if (command.action==='state') result=await client.state(command.threadId,!!command.refresh,
+          progress=>process.stdout.write(JSON.stringify({id:command.id,progress})+'\n'));
         else result=await client.act(command.threadId,command.action,command.data || {});
         process.stdout.write(JSON.stringify({id:command.id,result})+'\n');
       } catch(e) {process.stdout.write(JSON.stringify({id:command?.id,error:e.message})+'\n');}

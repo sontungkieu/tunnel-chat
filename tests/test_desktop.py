@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 import uuid
@@ -69,6 +70,21 @@ class DesktopTests(unittest.TestCase):
             second=desktop.link(server,task)
         self.assertEqual(first["chat_id"],second["chat_id"])
         self.assertEqual(server.get_codex_chat(first["chat_id"])["repo_path"],r"D:\dev\work")
+
+    def test_background_load_reports_progress_and_result(self):
+        task=str(uuid.uuid4())
+        def fake_link(_server,value,progress=None):
+            progress({"stage":"receiving-history","receivedBytes":50,"totalBytes":100,"percent":50})
+            return {"chat_id":7,"state":{"threadId":value}}
+        with mock.patch.object(desktop,"link",side_effect=fake_link):
+            started=desktop.start_load(server,{"thread":"codex://threads/"+task})
+            for _ in range(100):
+                status=desktop.load_status({"load_id":started["load_id"]})
+                if status["status"] != "loading":
+                    break
+                time.sleep(0.01)
+        self.assertEqual(status["status"],"complete")
+        self.assertEqual(status["result"]["state"]["threadId"],task)
 
     def test_mutation_deduplicates_and_rejects_reused_id(self):
         chat=self.chat();operation=str(uuid.uuid4())

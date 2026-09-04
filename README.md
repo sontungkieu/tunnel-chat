@@ -138,7 +138,10 @@ values remain metadata and are never resolved as Linux paths.
 - Command/file approvals offer one-time accept or decline. User-input questions
   can be answered on the page; other request types direct you to the app.
 - **Kết nối lại** rediscovers the owner and requests a fresh snapshot. After a
-  server restart, select a linked task to reconnect.
+  server restart, select a linked task to reconnect. Initial loads and reconnects
+  run as background jobs so the HTTPS request does not time out. The page reports
+  the current IPC stage, elapsed seconds, and received bytes/percentage while a
+  large snapshot frame is arriving.
 - Mutation operation IDs are persisted. Completed operations are deduplicated;
   pending/uncertain operations are never replayed. After a timeout, inspect the
   task before sending again. Prompt uploads are consumed before dispatch, so
@@ -161,8 +164,9 @@ tasks no longer need them. Original uploads stay under `data/codex_attachments/`
 This is an **experimental internal desktop IPC integration**, independently
 implemented against app `26.901.1978.0` (stream schema version 11). It is not a
 documented public remote API. Unsupported versions, missing owners, stale turn IDs
-and disconnected clients fail closed. Future app updates can require an adapter
-update.
+and disconnected clients fail closed. Snapshot frames are capped at 128 MiB and
+complete-history requests at three minutes. Future app updates can require an
+adapter update.
 
 Validation includes read-only access from WSL to an actual running desktop task.
 Write lifecycle tests use an IPC simulator and a disposable browser fixture;

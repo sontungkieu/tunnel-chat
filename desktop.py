@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 
 UUID_PATTERN = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.I)
@@ -48,7 +49,7 @@ def bridge_command(config: dict[str, str]) -> list[str]:
     if not node.lower().endswith("node.exe"):
         raise ValueError("Desktop IPC requires Windows node.exe, not Linux node")
     script = Path(__file__).with_name("desktop_ipc.cjs")
-    return [node, windows_path(str(script))]
+    return [node, "--max-old-space-size=1024", windows_path(str(script))]
 
 
 class Bridge:
@@ -79,7 +80,7 @@ class Bridge:
         finally:
             responses.put({"error": "Windows bridge disconnected"})
 
-    def call(self, config, action, task=None, data=None, refresh=False):
+    def call(self, config, action, task=None, data=None, refresh=False, progress=None, timeout=40):
         with self.lock:
             if not self.process or self.process.poll() is not None:
                 self.close()
@@ -91,17 +92,23 @@ class Bridge:
                 )
                 threading.Thread(target=self._read, args=(self.process, self.responses), daemon=True).start()
             request_id = str(uuid.uuid4())
+            deadline = time.monotonic() + timeout
             try:
                 self.process.stdin.write(json.dumps({"id": request_id, "action": action,
                     "threadId": task, "data": data or {}, "refresh": refresh}, ensure_ascii=False) + "\n")
                 self.process.stdin.flush()
-                response = self.responses.get(timeout=40)
-                if response.get("id") != request_id:
-                    self.close()
-                    raise ValueError("Windows bridge disconnected; refresh before resending")
-                if response.get("error"):
-                    raise ValueError(response["error"])
-                return response["result"]
+                while True:
+                    response = self.responses.get(timeout=max(0.1, deadline - time.monotonic()))
+                    if response.get("id") != request_id:
+                        self.close()
+                        raise ValueError("Windows bridge disconnected; refresh before resending")
+                    if "progress" in response:
+                        if progress:
+                            progress(response["progress"])
+                        continue
+                    if response.get("error"):
+                        raise ValueError(response["error"])
+                    return response["result"]
             except (OSError, queue.Empty) as exc:
                 self.close()
                 raise ValueError("Bridge timed out/disconnected; outcome unknown. Refresh before resending.") from exc
@@ -131,9 +138,10 @@ def require_chat(server, chat_id):
     return chat
 
 
-def state(server, chat_id, refresh=False):
+def state(server, chat_id, refresh=False, progress=None):
     chat = require_chat(server, chat_id)
-    result = BRIDGE.call(server.load_config(), "state", chat["codex_session_id"], refresh=refresh)
+    result = BRIDGE.call(server.load_config(), "state", chat["codex_session_id"], refresh=refresh,
+                         progress=progress, timeout=240)
     # Native paths are metadata here; never resolve a Windows cwd as a Linux path.
     with server.connect() as conn:
         conn.execute("""UPDATE codex_chats SET title=?,repo_path=?,status=?,updated_at=?
@@ -143,9 +151,10 @@ def state(server, chat_id, refresh=False):
     return result
 
 
-def link(server, value):
+def link(server, value, progress=None):
     task = thread_id(value)
-    result = BRIDGE.call(server.load_config(), "state", task, refresh=True)
+    result = BRIDGE.call(server.load_config(), "state", task, refresh=True,
+                         progress=progress, timeout=240)
     with server.connect() as conn:
         conn.execute("""INSERT OR IGNORE INTO codex_chats
             (created_at,updated_at,title,repo_path,codex_session_id,status,backend,host_id)
@@ -155,6 +164,84 @@ def link(server, value):
             WHERE backend='desktop' AND host_id='local' AND codex_session_id=?""",(task,)).fetchone()[0]
         conn.commit()
     return {"chat_id":chat_id,"state":result}
+
+
+LOADS = {}
+LOADS_LOCK = threading.Lock()
+LOAD_TTL_SECONDS = 10 * 60
+
+
+def load_view(job):
+    view = {"load_id": job["load_id"], "status": job["status"], "stage": job["stage"],
+            "elapsed_seconds": round(time.monotonic() - job["started"], 1)}
+    if job.get("progress"):
+        view["progress"] = job["progress"]
+    if job["status"] == "complete":
+        view["result"] = job["result"]
+    elif job["status"] == "error":
+        view["error"] = job["error"]
+    return view
+
+
+def cleanup_loads():
+    cutoff = time.monotonic() - LOAD_TTL_SECONDS
+    for load_id, job in list(LOADS.items()):
+        if job["status"] in {"complete", "error"} and job["finished"] < cutoff:
+            del LOADS[load_id]
+
+
+def start_load(server, data):
+    value = str(data.get("thread") or "").strip()
+    chat_id = int(data.get("chat_id") or 0)
+    refresh = bool(data.get("refresh"))
+    if value:
+        target = ("link", thread_id(value))
+    else:
+        require_chat(server, chat_id)
+        target = ("state", chat_id)
+    load_id = str(uuid.uuid4())
+    job = {"load_id": load_id, "status": "loading", "stage": "queued",
+           "progress": {}, "started": time.monotonic(), "finished": 0.0}
+    with LOADS_LOCK:
+        cleanup_loads()
+        LOADS[load_id] = job
+
+    def update_progress(update):
+        with LOADS_LOCK:
+            job["stage"] = str(update.get("stage") or job["stage"])
+            job["progress"] = {key: update[key] for key in
+                               ("receivedBytes", "totalBytes", "percent") if key in update}
+
+    def run():
+        try:
+            if target[0] == "link":
+                result = link(server, target[1], progress=update_progress)
+            else:
+                result = {"chat_id": target[1],
+                          "state": state(server, target[1], refresh=refresh, progress=update_progress)}
+            with LOADS_LOCK:
+                job.update(status="complete", stage="complete", result=result,
+                           progress={}, finished=time.monotonic())
+        except Exception as exc:
+            with LOADS_LOCK:
+                job.update(status="error", stage="error", error=server.redact_secrets(str(exc)),
+                           progress={}, finished=time.monotonic())
+
+    threading.Thread(target=run, name=f"desktop-load-{load_id[:8]}", daemon=True).start()
+    with LOADS_LOCK:
+        return load_view(job)
+
+
+def load_status(data):
+    load_id = str(data.get("load_id") or "")
+    if not UUID_PATTERN.fullmatch(load_id):
+        raise ValueError("A valid load_id is required")
+    with LOADS_LOCK:
+        cleanup_loads()
+        job = LOADS.get(load_id)
+        if not job:
+            raise ValueError("Load request expired or was not found")
+        return load_view(job)
 
 
 def stage_attachments(server, chat_id, ids):
@@ -225,6 +312,10 @@ def dispatch(server, action, data):
             chats=[dict(row) for row in conn.execute(
                 "SELECT * FROM codex_chats WHERE backend='desktop' ORDER BY updated_at DESC")]
         return {"chats":chats,"transport":json.loads(server.client_transport_config())}
+    if action == "load/start":
+        return start_load(server, data)
+    if action == "load/status":
+        return load_status(data)
     if action == "link":
         return link(server,str(data.get("thread") or ""))
     chat_id = int(data.get("chat_id") or 0)
