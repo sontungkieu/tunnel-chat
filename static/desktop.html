@@ -2,26 +2,50 @@
 <html lang="vi">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Tunnel Chat · Codex</title><link rel="stylesheet" href="/static/desktop.css">
+  <meta name="color-scheme" content="light dark">
+  <title>Tunnel Chat · Codex</title>
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem("tunnelChatTheme")||
+    (matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch(_error){}</script>
+  <link rel="stylesheet" href="/static/desktop.css">
   <script defer src="/static/shared.js"></script><script defer src="/static/desktop.js"></script>
 </head>
 <body>
   <aside>
-    <h1>Tunnel Chat</h1><p class="muted">Kết nối task trong app Windows</p>
-    <nav><b>Codex</b><a href="/chat/">ChatGPT web</a><a href="/codex/cli">WSL CLI</a><a href="/queue">Fix queue</a></nav>
-    <form id="linkForm">
-      <label for="thread">Link hoặc ID task</label>
-      <input id="thread" placeholder="codex://threads/…" required autocomplete="off">
-      <button type="button" id="linkButton">Kết nối task</button>
-    </form>
-    <p class="muted small">Mở task trong app trước khi kết nối. Runtime, model và quyền thực thi theo thiết lập của task.</p>
-    <div id="taskList" aria-label="Các task đã kết nối"></div>
-    <button id="logout" class="secondary">Xóa token trên trình duyệt</button>
+    <div class="brand-row">
+      <div class="brand-mark" aria-hidden="true">T</div>
+      <div class="brand-copy"><h1>Tunnel Chat</h1><p class="muted">Codex Desktop từ xa</p></div>
+      <button type="button" id="themeToggle" class="icon-button" aria-label="Đổi giao diện sáng tối">
+        <span id="themeIcon" aria-hidden="true">☾</span>
+      </button>
+    </div>
+    <nav aria-label="Điều hướng">
+      <b aria-current="page">Codex</b><a href="/chat/">ChatGPT web</a><a href="/codex/cli">WSL CLI</a><a href="/queue">Fix queue</a>
+    </nav>
+    <section class="sidebar-section">
+      <div class="section-label">Kết nối task</div>
+      <form id="linkForm">
+        <label for="thread" class="sr-only">Link hoặc ID task</label>
+        <input id="thread" placeholder="codex://threads/…" required autocomplete="off">
+        <button type="button" id="linkButton">Kết nối</button>
+      </form>
+      <p class="muted small">Mở task trong app Windows trước khi kết nối.</p>
+    </section>
+    <section class="sidebar-section task-section">
+      <div class="section-label">Task gần đây</div>
+      <div id="taskList" aria-label="Các task đã kết nối"></div>
+    </section>
+    <button id="logout" class="secondary quiet-button">Xóa token trên trình duyệt</button>
   </aside>
   <main>
     <header>
-      <div><h2 id="title">Chọn một task</h2><div id="meta" class="muted"></div></div>
-      <button id="reconnect" class="secondary">Kết nối lại</button>
+      <div class="task-heading"><span class="eyebrow">Task hiện tại</span><h2 id="title">Chọn một task</h2><div id="meta" class="muted"></div></div>
+      <div class="header-actions">
+        <details id="activityPanel" class="activity-panel" open>
+          <summary><span class="status-dot" aria-hidden="true"></span><span id="status" aria-live="polite">Chưa kết nối</span><span class="chevron" aria-hidden="true"></span></summary>
+          <p id="activityDetail" class="muted small">Kết nối một task để theo dõi hoạt động.</p>
+        </details>
+        <button id="reconnect" class="secondary">Kết nối lại</button>
+      </div>
     </header>
     <div id="notice" role="alert" hidden></div>
     <section id="messages" aria-label="Hội thoại">
@@ -29,16 +53,18 @@
     </section>
     <section id="requests" aria-label="Yêu cầu chờ trả lời"></section>
     <form id="composer">
-      <label for="prompt" class="sr-only">Tin nhắn</label>
-      <textarea id="prompt" rows="4" placeholder="Gửi tin nhắn tới task… Ctrl+Enter để gửi"></textarea>
-      <div id="filesLabel" class="muted small"></div>
-      <footer>
-        <label class="file-button">Đính kèm<input id="files" type="file" multiple></label>
-        <select id="mode" aria-label="Cách gửi"><option value="start">Lượt mới</option><option value="steer">Chỉ dẫn cho lượt đang chạy</option></select>
-        <span id="status" aria-live="polite">Chưa kết nối</span>
-        <button type="button" id="stop" class="danger" disabled>Dừng lượt</button>
-        <button id="send" disabled>Gửi</button>
-      </footer>
+      <div class="composer-shell">
+        <label for="prompt" class="sr-only">Tin nhắn</label>
+        <textarea id="prompt" rows="3" placeholder="Gửi tin nhắn tới task… Ctrl+Enter để gửi"></textarea>
+        <div id="filesLabel" class="muted small"></div>
+        <footer>
+          <label class="file-button"><span aria-hidden="true">＋</span> Đính kèm<input id="files" type="file" multiple></label>
+          <select id="mode" aria-label="Cách gửi"><option value="start">Lượt mới</option><option value="steer">Chỉ dẫn cho lượt đang chạy</option></select>
+          <span class="composer-spacer"></span>
+          <button type="button" id="stop" class="danger" disabled>Dừng lượt</button>
+          <button id="send" disabled>Gửi <span aria-hidden="true">↑</span></button>
+        </footer>
+      </div>
     </form>
   </main>
 </body>

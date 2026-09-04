@@ -151,6 +151,9 @@ values remain metadata and are never resolved as Linux paths.
 - Images in desktop user messages are copied into a managed, chat-scoped local
   cache and loaded by the web page through the authenticated desktop endpoint;
   native Windows source paths are never returned to the browser.
+- The Codex page supports persistent light and dark themes. Its live activity
+  panel can be collapsed, and completed tool calls are collapsed by default
+  while running or failed calls stay open for inspection.
 - Mutation operation IDs are persisted. Completed operations are deduplicated;
   pending/uncertain operations are never replayed. After a timeout, inspect the
   task before sending again. Prompt uploads are consumed before dispatch, so

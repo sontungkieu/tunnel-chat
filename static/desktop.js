@@ -16,7 +16,25 @@ const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết 
 const activityLabels={thinking:"Đang suy nghĩ",tool:"Đang chạy công cụ",waiting:"Đang chờ bạn",
   finalizing:"Đang hoàn tất câu trả lời",working:"Agent đang làm việc",completed:"Đã trả lời xong",
   interrupted:"Đã dừng",failed:"Có lỗi",idle:"Sẵn sàng"};
+const activityDetails={thinking:"Agent đang xử lý yêu cầu. Nội dung suy luận chi tiết được giữ trong Codex Desktop.",
+  tool:"Một công cụ đang chạy. Mở khối công cụ trong hội thoại để xem lệnh và trạng thái.",
+  waiting:"Task đang chờ bạn trả lời một câu hỏi hoặc yêu cầu phê duyệt.",
+  finalizing:"Agent đang chuẩn bị phần trả lời cuối cùng.",working:"Agent đang tiếp tục lượt hiện tại.",
+  completed:"Lượt gần nhất đã hoàn tất.",interrupted:"Lượt gần nhất đã dừng.",failed:"Lượt gần nhất gặp lỗi.",
+  idle:"Task đã kết nối và sẵn sàng nhận tin nhắn."};
+const toolStatusLabels={inprogress:"Đang chạy",completed:"Hoàn tất",failed:"Thất bại",declined:"Đã từ chối",
+  cancelled:"Đã dừng",canceled:"Đã dừng",interrupted:"Đã dừng"};
 const wait=milliseconds=>new Promise(resolve=>setTimeout(resolve,milliseconds));
+function applyTheme(theme) {
+  const selected=theme==="light"?"light":"dark";
+  document.documentElement.dataset.theme=selected;
+  localStorage.setItem("tunnelChatTheme",selected);
+  $("themeIcon").textContent=selected==="dark"?"☀":"☾";
+  $("themeToggle").title=selected==="dark"?"Chuyển sang giao diện sáng":"Chuyển sang giao diện tối";
+  $("themeToggle").setAttribute("aria-label",$("themeToggle").title);
+}
+applyTheme(document.documentElement.dataset.theme || "dark");
+$("themeToggle").onclick=()=>applyTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
 function operationId() {
   // crypto.randomUUID is unavailable on an ordinary HTTP tunnel/LAN origin.
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -73,13 +91,32 @@ async function loadMessageImage(element,caption,image,chatId,revision) {
     if(revision===imageRenderRevision && caption.isConnected)caption.textContent=`${image.name || "Ảnh"} · không tải được`;
   }
 }
+function updateActivity(activity,label) {
+  const panel=$("activityPanel"),next=activity || "idle";
+  panel.dataset.activity=next;
+  $("status").textContent=label || activityLabels[next] || "Sẵn sàng";
+  $("activityDetail").textContent=activityDetails[next] || activityDetails.idle;
+}
+function toolCard(message) {
+  const status=String(message.status || "").toLowerCase();
+  const details=textElement("details","","message tool");details.dataset.status=status || "unknown";
+  details.open=!["completed","declined","cancelled","canceled","interrupted"].includes(status);
+  const summary=document.createElement("summary"),icon=textElement("span",">_","tool-icon");
+  const heading=textElement("span","","tool-heading");
+  const preview=String(message.text || "").replace(/\s+/g," ").trim();
+  heading.append(textElement("span",status==="inprogress"?"Công cụ đang chạy":"Hoạt động công cụ","tool-title"),
+    textElement("span",preview || "Không có chi tiết","tool-preview"));
+  summary.append(icon,heading,textElement("span",toolStatusLabels[status] || status || "Chi tiết","tool-status"));
+  details.append(summary,textElement("pre",message.text || "Không có nội dung bổ sung."));
+  return details;
+}
 function renderState(state) {
   snapshot=state;
   $("title").textContent=state.title;
   const project=state.project || (state.cwd || "").replace(/[\\/]+$/,"").split(/[\\/]/).at(-1);
   $("meta").textContent=[project?`Project: ${project}`:"Project: chưa xác định",state.model,state.cwd,"Desktop · local"].filter(Boolean).join(" · ");
-  $("status").textContent=activityLabels[state.activity] || (state.status==="running"?"Agent đang làm việc":"Sẵn sàng");
-  $("status").dataset.activity=state.activity || state.status;
+  updateActivity(state.activity || state.status,
+    activityLabels[state.activity] || (state.status==="running"?"Agent đang làm việc":"Sẵn sàng"));
   updateControls();
   const next=JSON.stringify(state.messages);
   if(next!==messageKey) {
@@ -88,8 +125,9 @@ function renderState(state) {
     const nearBottom=$("messages").scrollHeight-$("messages").scrollTop-$("messages").clientHeight<100;
     const fragment=document.createDocumentFragment();
     for(const message of state.messages) {
+      if(message.role==="tool") {fragment.append(toolCard(message));continue;}
       const card=textElement("article","","message "+message.role);
-      card.append(textElement("div",message.role+(message.status?" · "+message.status:""),"role"));
+      card.append(textElement("div",message.role==="user"?"Bạn":"Codex","role"));
       if(message.text)card.append(textElement("div",message.text));
       if(Array.isArray(message.images) && message.images.length) {
         const gallery=textElement("div","","message-images");
@@ -104,7 +142,7 @@ function renderState(state) {
       }
       fragment.append(card);
     }
-    if(state.historyTruncated) fragment.prepend(textElement("p","Đang hiển thị 600 mục gần nhất.","muted small"));
+    if(state.historyTruncated) fragment.prepend(textElement("p","Đang hiển thị 600 mục gần nhất.","history-note"));
     $("messages").replaceChildren(fragment);
     if(nearBottom || !messageKey) $("messages").scrollTop=$("messages").scrollHeight;
     messageKey=next;
@@ -177,7 +215,7 @@ async function refresh(force=false) {
       : await rpc("state",{chat_id:selected,refresh:false});
     if(selected===active)renderState(state);
   }
-  catch(e) {snapshot=null;updateControls();$("status").textContent="Mất kết nối";notice(e.message);}
+  catch(e) {snapshot=null;updateControls();updateActivity("failed","Mất kết nối");notice(e.message);}
   finally {polling=false;}
 }
 $("linkForm").onsubmit=async event=>{

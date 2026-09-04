@@ -14,8 +14,12 @@ import server
 
 TASK="11111111-1111-4111-8111-111111111111"
 state={"threadId":TASK,"title":"Demo · kiểm thử giao diện","cwd":r"D:\dev\demo",
-    "backend":"desktop","hostId":"local","model":"simulator","status":"idle","activeTurnId":None,
-    "revision":1,"messages":[{"id":"welcome","role":"assistant","text":"Đây là task mô phỏng. Không gọi model."}],
+    "project":"demo","projectPath":r"D:\dev\demo","backend":"desktop","hostId":"local",
+    "model":"simulator","status":"running","activity":"tool","activeTurnId":"demo-turn",
+    "revision":1,"messages":[{"id":"welcome","role":"assistant","text":"Đây là task mô phỏng. Không gọi model."},
+        {"id":"question","role":"user","text":"Kiểm tra giao diện sáng tối và khối công cụ."},
+        {"id":"tool-done","role":"tool","text":"python -m unittest discover -s tests","status":"completed"},
+        {"id":"tool-live","role":"tool","text":"uv run python preview.py","status":"inProgress"}],
     "requests":[{"id":"test-approval","method":"item/commandExecution/requestApproval",
                  "params":{"command":"echo preview","availableDecisions":["accept","decline"]}}],
     "historyTruncated":False}
