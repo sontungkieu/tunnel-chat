@@ -145,6 +145,12 @@ values remain metadata and are never resolved as Linux paths.
 - The selected task reports its latest turn state separately: thinking, running a
   tool, waiting for user input, finalizing, completed, interrupted, or failed.
   A connected desktop runtime by itself is not treated as an active assistant turn.
+- Desktop history projection prefers the canonical user-message item, removes the
+  injected in-app browser context wrapper, and labels the task's project from its
+  runtime workspace root (falling back to the current working directory).
+- Images in desktop user messages are copied into a managed, chat-scoped local
+  cache and loaded by the web page through the authenticated desktop endpoint;
+  native Windows source paths are never returned to the browser.
 - Mutation operation IDs are persisted. Completed operations are deduplicated;
   pending/uncertain operations are never replayed. After a timeout, inspect the
   task before sending again. Prompt uploads are consumed before dispatch, so

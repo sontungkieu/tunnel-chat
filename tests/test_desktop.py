@@ -110,6 +110,36 @@ class DesktopTests(unittest.TestCase):
                 desktop.stage_attachments(server,chat,[999])
             call.assert_not_called()
 
+    def test_staged_image_uses_local_image_without_path_text(self):
+        chat=self.chat();folder=server.CODEX_ATTACHMENTS_DIR/str(chat);folder.mkdir(parents=True)
+        source=folder/"1-screen.png";source.write_bytes(b"image")
+        attachment={"id":1,"filename":"screen.png","path":str(source),"is_image":1}
+        staged={"windowsPath":r"D:\cache\screen.png","wslPath":"/mnt/d/cache/screen.png"}
+        with mock.patch.object(server,"get_codex_attachments",return_value=[attachment]), \
+             mock.patch.object(desktop.BRIDGE,"call",return_value=staged):
+            text,images=desktop.stage_attachments(server,chat,[1])
+        self.assertEqual(text,"")
+        self.assertEqual(images,[staged["windowsPath"]])
+
+    def test_desktop_images_are_cached_without_exposing_native_paths(self):
+        chat=self.chat();other_chat=self.chat()
+        source=self.root/"clipboard.png"
+        source.write_bytes(b"\x89PNG\r\n\x1a\nlocal-image")
+        native_path=r"C:\Users\Tung\AppData\Local\Temp\clipboard.png"
+        result={"threadId":str(uuid.uuid4()),"messages":[
+            {"id":"u","role":"user","text":"screenshot","images":[native_path]}]}
+        with mock.patch.object(desktop,"local_path_from_windows",return_value=source):
+            desktop.prepare_state_images(server,chat,result)
+        self.assertNotIn(native_path,str(result))
+        image=result["messages"][0]["images"][0]
+        self.assertNotIn("path",image)
+        self.assertRegex(image["id"],r"^[0-9a-f]{32}$")
+        cached=desktop.image_file(server,chat,image["id"])
+        self.assertEqual(cached["path"].read_bytes(),source.read_bytes())
+        self.assertEqual(cached["mime_type"],"image/png")
+        with self.assertRaisesRegex(ValueError,"unavailable"):
+            desktop.image_file(server,other_chat,image["id"])
+
     def test_native_path_and_linux_node_are_not_silently_mixed(self):
         with self.assertRaisesRegex(ValueError,"task ID"):
             desktop.thread_id("../../config")
@@ -144,6 +174,13 @@ class DesktopTests(unittest.TestCase):
                 server.create_repo_zip(str(self.root))
 
     def test_http_header_auth_and_no_public_data(self):
+        chat=self.chat()
+        source=self.root/"http-image.png";source.write_bytes(b"\x89PNG\r\n\x1a\nhttp-image")
+        result={"threadId":str(uuid.uuid4()),"messages":[
+            {"id":"u","role":"user","text":"","images":[r"C:\Temp\http-image.png"]}]}
+        with mock.patch.object(desktop,"local_path_from_windows",return_value=source):
+            desktop.prepare_state_images(server,chat,result)
+        image_id=result["messages"][0]["images"][0]["id"]
         httpd=server.ThreadingHTTPServer(("127.0.0.1",0),server.ChatHandler)
         httpd.daemon_threads=True;httpd.chat_token="test-only-token"
         thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()
@@ -156,10 +193,20 @@ class DesktopTests(unittest.TestCase):
                 connection.close();return result
             self.assertEqual(get("/c/state?token=test-only-token")[0],401)
             self.assertEqual(get("/d/list")[0],401)
+            self.assertEqual(get(f"/d/image?chat_id={chat}&image_id={image_id}")[0],401)
             with mock.patch.object(server,"load_config",return_value={"desktop_enabled":"1"}):
                 code,body,policy=get("/d/list",{"x-chat-token":"test-only-token"})
-                self.assertEqual(code,200);self.assertEqual(json.loads(body)["chats"],[])
+                self.assertEqual(code,200)
+                self.assertEqual([item["id"] for item in json.loads(body)["chats"]],[chat])
                 self.assertEqual(policy,"no-referrer")
+                connection=http.client.HTTPConnection("127.0.0.1",httpd.server_port,timeout=5)
+                connection.request("GET",f"/d/image?chat_id={chat}&image_id={image_id}",
+                                   headers={"x-chat-token":"test-only-token"})
+                response=connection.getresponse();image_body=response.read()
+                self.assertEqual(response.status,200)
+                self.assertEqual(response.getheader("content-type"),"image/png")
+                self.assertTrue(response.getheader("content-disposition").startswith("inline;"))
+                self.assertEqual(image_body,source.read_bytes());connection.close()
             self.assertEqual(get("/desktop")[0],302)
             self.assertEqual(get("/")[0],302)
             for path in ("/codex", "/codex/cli", "/queue"):

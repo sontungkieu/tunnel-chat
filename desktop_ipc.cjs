@@ -96,8 +96,34 @@ function turnsOf(state) {
   if (Array.isArray(state.turns)) return state.turns;
   throw Error('Unsupported desktop history schema');
 }
+function visibleUserText(value) {
+  return String(value || '')
+    .replace(/(?:^|\n)\s*<in-app-browser-context\b[^>]*>[\s\S]*?<\/in-app-browser-context>\s*/gi,'\n')
+    .replace(/^\s*## My request:\s*/i,'')
+    .trim();
+}
 function textInput(input) {
-  return (Array.isArray(input) ? input : []).filter(i=>i.type==='text').map(i=>i.text || '').join('\n');
+  return visibleUserText((Array.isArray(input) ? input : [])
+    .filter(i=>i.type==='text').map(i=>i.text || '').join('\n'));
+}
+function imageInput(input) {
+  return (Array.isArray(input) ? input : [])
+    .filter(item=>item?.type==='localImage' && typeof item.path==='string' && item.path.trim())
+    .map(item=>item.path);
+}
+function userInput(item) {
+  const input=Array.isArray(item?.content) ? item.content : (Array.isArray(item?.input) ? item.input : []);
+  return {text:visibleUserText(item?.text || textInput(input)),images:imageInput(input)};
+}
+function sameUserInput(left,right) {
+  return left.text===right.text && left.images.length===right.images.length &&
+    left.images.every((image,index)=>image===right.images[index]);
+}
+function projectOf(state, latestTurn) {
+  const roots=(latestTurn?.params?.runtimeWorkspaceRoots || []).filter(value=>typeof value==='string' && value.trim());
+  const projectPath=roots[0] || (typeof state.cwd==='string' ? state.cwd : '');
+  const trimmed=projectPath.replace(/[\\/]+$/,'');
+  return {project:trimmed.split(/[\\/]/).at(-1) || '',projectPath};
 }
 const TERMINAL_ITEM_STATUSES=new Set(['completed','failed','declined','cancelled','canceled','interrupted']);
 function activityOf(state, latestTurn, activeTurn) {
@@ -132,15 +158,18 @@ function projectState(state, revision) {
     messages.push(message);
   };
   for (const turn of turns) {
-    const user = textInput(turn.params?.input);
-    if (user) addMessage({id:turn.turnId+':user',role:'user',text:user});
+    const turnUser={text:textInput(turn.params?.input),images:imageInput(turn.params?.input)};
+    const hasCanonicalUser=(turn.items || []).some(item=>item.type==='userMessage' &&
+      sameUserInput(userInput(item),turnUser));
+    if ((turnUser.text || turnUser.images.length) && !hasCanonicalUser)
+      addMessage({id:turn.turnId+':user',role:'user',...turnUser});
     for (const item of turn.items || []) {
       // Do not export reasoning, ambient context, configuration, or arbitrary tool payloads.
       if (item.type === 'agentMessage' || item.type === 'assistantMessage')
         addMessage({id:item.id,role:'assistant',text:item.text || '',phase:item.phase || ''});
       else if (item.type === 'steeringUserMessage' || item.type === 'userMessage') {
-        const text = item.text || textInput(item.content || item.input);
-        if (text) addMessage({id:item.id,role:'user',text});
+        const user=userInput(item);
+        if (user.text || user.images.length) addMessage({id:item.id,role:'user',...user});
       } else if (item.type === 'commandExecution')
         addMessage({id:item.id,role:'tool',text:String(item.command || ''),status:item.status});
       else if (item.type === 'fileChange')
@@ -151,8 +180,10 @@ function projectState(state, revision) {
   const active=latest?.status==='inProgress' ? latest : null;
   const activity=activityOf(state,latest,active);
   const running=!!active || activity==='waiting';
+  const project=projectOf(state,latest);
   return {threadId:state.id,title:state.title || state.generatedTitle || state.id,
     cwd:state.cwd || '',backend:'desktop',hostId:'local',
+    project:project.project,projectPath:project.projectPath,
     model:state.latestModel || '',status:running?'running':'idle',activity,
     activeTurnId:active?.turnId || null,revision,
     messages,

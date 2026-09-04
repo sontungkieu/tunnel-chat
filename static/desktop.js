@@ -6,6 +6,7 @@ const rpc = RLCSDTransport.createRpc({apiBase:"/d",token,retryLimit:1});
 const uploads = RLCSDTransport.createRpc({apiBase:"/c",token,retryLimit:1});
 let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
 let snapshot = null, busy = false, polling = false, requestKey = "", messageKey = "";
+let messageImageUrls = [], imageRenderRevision = 0;
 let transport = {chunkBytes:6144,concurrency:3,retryLimit:4};
 const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết nối Codex Desktop",
   cached:"Đang dùng snapshot đã tải",discovering:"Đang tìm tiến trình sở hữu task",
@@ -56,21 +57,51 @@ function textElement(tag,text,className) {
   const element=document.createElement(tag);element.textContent=String(text || "");
   if(className) element.className=className;return element;
 }
+function releaseMessageImages() {
+  for(const url of messageImageUrls) URL.revokeObjectURL(url);
+  messageImageUrls=[];
+}
+async function loadMessageImage(element,caption,image,chatId,revision) {
+  try {
+    const query=new URLSearchParams({chat_id:String(chatId),image_id:String(image.id || "")});
+    const response=await fetch(`/d/image?${query}`,{cache:"no-store",headers:{"x-chat-token":token}});
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    const url=URL.createObjectURL(await response.blob());
+    if(revision!==imageRenderRevision || !element.isConnected) {URL.revokeObjectURL(url);return;}
+    element.src=url;messageImageUrls.push(url);
+  } catch(_error) {
+    if(revision===imageRenderRevision && caption.isConnected)caption.textContent=`${image.name || "Ảnh"} · không tải được`;
+  }
+}
 function renderState(state) {
   snapshot=state;
   $("title").textContent=state.title;
-  $("meta").textContent=[state.model,state.cwd,"Desktop · local"].filter(Boolean).join(" · ");
+  const project=state.project || (state.cwd || "").replace(/[\\/]+$/,"").split(/[\\/]/).at(-1);
+  $("meta").textContent=[project?`Project: ${project}`:"Project: chưa xác định",state.model,state.cwd,"Desktop · local"].filter(Boolean).join(" · ");
   $("status").textContent=activityLabels[state.activity] || (state.status==="running"?"Agent đang làm việc":"Sẵn sàng");
   $("status").dataset.activity=state.activity || state.status;
   updateControls();
   const next=JSON.stringify(state.messages);
   if(next!==messageKey) {
+    releaseMessageImages();
+    const revision=++imageRenderRevision,chatId=active;
     const nearBottom=$("messages").scrollHeight-$("messages").scrollTop-$("messages").clientHeight<100;
     const fragment=document.createDocumentFragment();
     for(const message of state.messages) {
       const card=textElement("article","","message "+message.role);
-      card.append(textElement("div",message.role+(message.status?" · "+message.status:""),"role"),
-        textElement("div",message.text));
+      card.append(textElement("div",message.role+(message.status?" · "+message.status:""),"role"));
+      if(message.text)card.append(textElement("div",message.text));
+      if(Array.isArray(message.images) && message.images.length) {
+        const gallery=textElement("div","","message-images");
+        for(const image of message.images) {
+          const figure=document.createElement("figure"),element=document.createElement("img");
+          element.className="message-image";element.loading="lazy";element.alt=image.name || "Ảnh đính kèm";
+          const caption=textElement("figcaption",image.name || "Ảnh đính kèm");
+          figure.append(element,caption);gallery.append(figure);
+          void loadMessageImage(element,caption,image,chatId,revision);
+        }
+        card.append(gallery);
+      }
       fragment.append(card);
     }
     if(state.historyTruncated) fragment.prepend(textElement("p","Đang hiển thị 600 mục gần nhất.","muted small"));
@@ -222,5 +253,5 @@ $("logout").onclick=()=>{
   // The bridge consumes live IPC patches; browsers poll its bounded projection.
   // No model call or history reload is performed by an ordinary poll.
   const timer=setInterval(()=>{if(!busy)refresh();},1500);
-  window.addEventListener("beforeunload",()=>clearInterval(timer));
+  window.addEventListener("beforeunload",()=>{clearInterval(timer);releaseMessageImages();});
 })();

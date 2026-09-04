@@ -3297,11 +3297,12 @@ class ChatHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def send_file(self, path: Path, filename: str, content_type: str = "application/zip") -> None:
+    def send_file(self, path: Path, filename: str, content_type: str = "application/zip",
+                  disposition: str = "attachment") -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("content-type", content_type)
         self.send_header("content-length", str(path.stat().st_size))
-        self.send_header("content-disposition", f'attachment; filename="{filename}"')
+        self.send_header("content-disposition", f'{disposition}; filename="{filename}"')
         self.send_header("cache-control", "no-store")
         self.end_headers()
         with path.open("rb") as handle:
@@ -3356,6 +3357,12 @@ class ChatHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
                 return
             try:
+                if raw_path == "/d/image":
+                    query = parse_qs(parsed.query)
+                    image = desktop.image_file(sys.modules[__name__],
+                        int(query.get("chat_id", ["0"])[0]), query.get("image_id", [""])[0])
+                    self.send_file(image["path"], image["filename"], image["mime_type"], "inline")
+                    return
                 result = desktop.dispatch(sys.modules[__name__], raw_path[3:],
                                           decode_get_payload(parse_qs(parsed.query)))
                 self.send_json(result)

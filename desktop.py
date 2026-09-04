@@ -6,6 +6,7 @@ from __future__ import annotations
 import atexit
 import hashlib
 import json
+import mimetypes
 import os
 from pathlib import Path
 import queue
@@ -17,6 +18,11 @@ import time
 import uuid
 
 UUID_PATTERN = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.I)
+IMAGE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+IMAGE_SUFFIXES = {
+    "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
+    "image/gif": ".gif", "image/bmp": ".bmp", "image/avif": ".avif",
+}
 
 
 def thread_id(value: str) -> str:
@@ -33,6 +39,92 @@ def windows_path(value: str) -> str:
         return str(Path(value).resolve())
     return subprocess.run(["wslpath", "-w", str(Path(value).resolve())],
                           check=True, capture_output=True, text=True, timeout=5).stdout.strip()
+
+
+def local_path_from_windows(value: str) -> Path:
+    """Translate a native drive path without allowing it to escape its WSL mount."""
+    if os.name == "nt":
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            raise ValueError("Image path must be absolute")
+        return candidate
+    match = re.fullmatch(r"([A-Za-z]):[\\/](.*)", value)
+    if not match:
+        raise ValueError("Image path must be a Windows drive path")
+    parts = match.group(2).replace("\\", "/").split("/")
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("Invalid image path")
+    return Path("/mnt") / match.group(1).lower() / Path(*parts)
+
+
+def prepare_state_images(server, chat_id: int, result: dict) -> dict:
+    """Copy native message images into a chat-scoped cache and hide source paths."""
+    messages = result.get("messages")
+    if not isinstance(messages, list):
+        return result
+    cache_root = server.DATA_DIR / "desktop_images" / str(chat_id)
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        raw_images = message.pop("images", [])
+        if not isinstance(raw_images, list):
+            continue
+        images = []
+        for raw_path in raw_images:
+            try:
+                if not isinstance(raw_path, str):
+                    raise ValueError("Invalid image path")
+                source = local_path_from_windows(raw_path)
+                if source.is_symlink() or not source.is_file():
+                    raise ValueError("Image is missing")
+                details = source.stat()
+                if details.st_size <= 0 or details.st_size > server.MAX_CODEX_ATTACHMENT_BYTES:
+                    raise ValueError("Image exceeds size limit")
+                mime_type = (mimetypes.guess_type(source.name)[0] or "").lower()
+                suffix = IMAGE_SUFFIXES.get(mime_type)
+                if not suffix or not server.is_image_attachment(source.name, mime_type):
+                    raise ValueError("Unsupported image type")
+                identity = "\0".join((str(result.get("threadId") or ""), raw_path,
+                    str(details.st_size), str(details.st_mtime_ns)))
+                image_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+                cache_root.mkdir(parents=True, exist_ok=True)
+                destination = cache_root / f"{image_id}{suffix}"
+                if not destination.is_file() or destination.stat().st_size != details.st_size:
+                    temporary = cache_root / f".{image_id}-{uuid.uuid4().hex}.tmp"
+                    try:
+                        shutil.copyfile(source, temporary)
+                        if temporary.stat().st_size != details.st_size:
+                            raise ValueError("Image changed while copying")
+                        os.replace(temporary, destination)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                images.append({"id": image_id, "name": server.safe_filename(source.name),
+                               "mime_type": mime_type, "size": details.st_size})
+            except (OSError, ValueError):
+                # Clipboard temp files can disappear between history load and projection.
+                continue
+        if images:
+            message["images"] = images
+    return result
+
+
+def image_file(server, chat_id: int, image_id: str) -> dict:
+    require_chat(server, chat_id)
+    if not IMAGE_ID_PATTERN.fullmatch(image_id):
+        raise ValueError("Invalid image ID")
+    cache_root = server.DATA_DIR / "desktop_images" / str(chat_id)
+    matches = list(cache_root.glob(f"{image_id}.*")) if cache_root.is_dir() else []
+    if len(matches) != 1:
+        raise ValueError("Image is unavailable")
+    image = matches[0]
+    resolved_root = cache_root.resolve()
+    if image.is_symlink() or not image.resolve().is_relative_to(resolved_root) or not image.is_file():
+        raise ValueError("Invalid image file")
+    size = image.stat().st_size
+    mime_type = (mimetypes.guess_type(image.name)[0] or "").lower()
+    if size <= 0 or size > server.MAX_CODEX_ATTACHMENT_BYTES or mime_type not in IMAGE_SUFFIXES:
+        raise ValueError("Invalid image file")
+    return {"path": image, "filename": image.name, "mime_type": mime_type}
 
 
 def bridge_command(config: dict[str, str]) -> list[str]:
@@ -142,6 +234,7 @@ def state(server, chat_id, refresh=False, progress=None):
     chat = require_chat(server, chat_id)
     result = BRIDGE.call(server.load_config(), "state", chat["codex_session_id"], refresh=refresh,
                          progress=progress, timeout=240)
+    prepare_state_images(server, chat_id, result)
     # Native paths are metadata here; never resolve a Windows cwd as a Linux path.
     with server.connect() as conn:
         conn.execute("""UPDATE codex_chats SET title=?,repo_path=?,status=?,updated_at=?
@@ -163,6 +256,7 @@ def link(server, value, progress=None):
         chat_id = conn.execute("""SELECT id FROM codex_chats
             WHERE backend='desktop' AND host_id='local' AND codex_session_id=?""",(task,)).fetchone()[0]
         conn.commit()
+    prepare_state_images(server, chat_id, result)
     return {"chat_id":chat_id,"state":result}
 
 
@@ -259,9 +353,10 @@ def stage_attachments(server, chat_id, ids):
             raise ValueError("Attachment missing or exceeds size limit")
         staged = BRIDGE.call(config,"stage",data={"source":windows_path(str(source)),
             "filename":attachment["filename"],"stagingRoot":config.get("desktop_staging_root")})
-        text.append(f"\nAttached file {attachment['filename']}:\nWindows: {staged['windowsPath']}\nWSL: {staged['wslPath']}")
         if attachment["is_image"]:
             images.append(staged["windowsPath"])
+        else:
+            text.append(f"\nAttached file {attachment['filename']}:\nWindows: {staged['windowsPath']}\nWSL: {staged['wslPath']}")
     return "\n".join(text), images
 
 

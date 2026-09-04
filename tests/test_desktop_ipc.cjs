@@ -39,6 +39,26 @@ test('canonical history is ordered and hidden reasoning is omitted',()=>{
   assert.ok(!JSON.stringify(view).includes('must not be exported'));
   assert.equal(view.cwd,'D:\\work');
 });
+test('projected user messages remove app context and canonical duplicates',()=>{
+  const s=sample(),wrapped=`\n<in-app-browser-context source="ambient-ui-state">\nprivate UI metadata\n</in-app-browser-context>\n\n## My request:\nhello`;
+  const image='C:\\Users\\Tung\\AppData\\Local\\Temp\\clipboard.png';
+  s.cwd='D:\\dev\\codex\\fallback';
+  s.turns[0].params.input=[{type:'text',text:wrapped},{type:'localImage',path:image}];
+  s.turns[0].params.runtimeWorkspaceRoots=['D:\\dev\\codex\\research_vdt'];
+  s.turns[0].items.unshift({type:'userMessage',id:'u',content:[{type:'text',text:wrapped},{type:'localImage',path:image}]});
+  const view=projectState(s,1),users=view.messages.filter(message=>message.role==='user');
+  assert.deepEqual(users,[{id:'u',role:'user',text:'hello',images:[image]}]);
+  assert.equal(view.project,'research_vdt');
+  assert.equal(view.projectPath,'D:\\dev\\codex\\research_vdt');
+});
+test('image-only user messages remain visible',()=>{
+  const s=sample(),image='C:\\Temp\\diagram.png';
+  s.turns[0].params.input=[{type:'localImage',path:image}];
+  s.turns[0].items=[];
+  assert.deepEqual(projectState(s,1).messages,[
+    {id:'turn-1:user',role:'user',text:'',images:[image]},
+  ]);
+});
 test('turn activity distinguishes thinking, tools, waiting and finished states',()=>{
   const completed=sample();completed.threadRuntimeStatus={type:'active'};
   assert.equal(projectState(completed,1).status,'idle');
