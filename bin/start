@@ -3,3 +3,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 uv run python server.py init-env >/dev/null
 uv run python service.py start
+
+set -a
+source .env.local
+set +a
+case "${TUNNEL_MODE:-local}" in
+    local|none|"") ;;
+    quick) ./bin/quick-tunnel ;;
+    persistent|named) ./bin/tunnel ;;
+    *) echo "Unsupported TUNNEL_MODE: $TUNNEL_MODE" >&2; exit 1 ;;
+esac

@@ -59,6 +59,8 @@ Other settings:
 - `CLOUDFLARED_BIN`: overrides the legacy default
   `/home/tung/.local/bin/cloudflared`.
 - `PUBLIC_URL`: optional existing named-tunnel hostname.
+- `TUNNEL_MODE`: tunnel started by `./bin/start`; `local` (default), `quick`,
+  or `persistent`/`named`. Use `quick` when no dedicated named tunnel is available.
 
 ## Run
 
@@ -69,7 +71,8 @@ From the checkout root:
 ./bin/url codex
 ```
 
-For remote browser access, start the existing quick tunnel workflow:
+For remote access, either set `TUNNEL_MODE=quick` and use `./bin/start`, or
+start the quick tunnel explicitly:
 
 ```bash
 ./bin/quick-tunnel
