@@ -2530,6 +2530,8 @@ def codex_page() -> str:
     }
     header h1 { margin: 0; font-size: 16px; font-weight: 650; }
     header a { color: var(--accent); text-decoration: none; font-size: 13px; }
+    .header-actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    #codexMode { max-width: 210px; font-weight: 650; }
     #status { color: var(--muted); font-size: 13px; white-space: nowrap; }
     .shell {
       min-height: 0;
@@ -2795,6 +2797,9 @@ def codex_page() -> str:
     }
     #notice.show { display: block; }
     @media (max-width: 760px) {
+      header h1, .header-actions a { display: none; }
+      header { justify-content: flex-end; }
+      #codexMode { max-width: none; flex: 1; }
       .shell { grid-template-columns: 1fr; }
       aside { max-height: 210px; border-right: 0; border-bottom: 1px solid var(--line); }
       footer { grid-template-columns: 1fr; }
@@ -2804,11 +2809,14 @@ def codex_page() -> str:
   </style>
 </head>
 <body>
-  <nav style="padding:8px 16px"><a href="/codex">Desktop app</a> · <a href="/codex/cli">WSL CLI</a> · <a href="/queue">Fix queue</a></nav>
   <header>
-    <h1>RLCSD Codex Mode</h1>
-    <div>
-      <a href="/queue">Fix queue</a>
+    <h1>Tunnel Chat</h1>
+    <div class="header-actions">
+      <select id="codexMode" aria-label="Chế độ Codex">
+        <option value="/codex">ChatGPT app (Windows)</option>
+        <option value="/codex/cli" selected>Codex CLI (WSL)</option>
+      </select>
+      <a href="/chat/">ChatGPT web</a><a href="/queue">Fix queue</a>
       <span id="status">connecting</span>
     </div>
   </header>
@@ -2846,6 +2854,7 @@ def codex_page() -> str:
   <script src="/static/shared.js"></script>
   <script>
     const token = RLCSDTransport.accessToken();
+    document.getElementById("codexMode").addEventListener("change", event => location.assign(event.target.value));
     const apiBase = "/c";
     const transportConfig = __TRANSPORT_CONFIG__;
     const uploadChunkBytes = transportConfig.chunkBytes;

@@ -154,6 +154,8 @@ values remain metadata and are never resolved as Linux paths.
 - The Codex page supports persistent light and dark themes. Its live activity
   panel can be collapsed, and completed tool calls are collapsed by default
   while running or failed calls stay open for inspection.
+- A Codex mode selector switches explicitly between ChatGPT app tasks on
+  Windows (`/codex`) and independent Codex CLI sessions in WSL (`/codex/cli`).
 - Mutation operation IDs are persisted. Completed operations are deduplicated;
   pending/uncertain operations are never replayed. After a timeout, inspect the
   task before sending again. Prompt uploads are consumed before dispatch, so

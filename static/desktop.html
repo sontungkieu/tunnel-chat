@@ -18,8 +18,15 @@
         <span id="themeIcon" aria-hidden="true">☾</span>
       </button>
     </div>
+    <section class="sidebar-section">
+      <label class="section-label" for="codexMode">Chế độ Codex</label>
+      <select id="codexMode" class="mode-select">
+        <option value="/codex" selected>ChatGPT app (Windows)</option>
+        <option value="/codex/cli">Codex CLI (WSL)</option>
+      </select>
+    </section>
     <nav aria-label="Điều hướng">
-      <b aria-current="page">Codex</b><a href="/chat/">ChatGPT web</a><a href="/codex/cli">WSL CLI</a><a href="/queue">Fix queue</a>
+      <a href="/chat/">ChatGPT web</a><a href="/queue">Fix queue</a>
     </nav>
     <section class="sidebar-section">
       <div class="section-label">Kết nối task</div>

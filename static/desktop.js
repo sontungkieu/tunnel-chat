@@ -35,6 +35,7 @@ function applyTheme(theme) {
 }
 applyTheme(document.documentElement.dataset.theme || "dark");
 $("themeToggle").onclick=()=>applyTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
+$("codexMode").onchange=event=>location.assign(event.target.value);
 function operationId() {
   // crypto.randomUUID is unavailable on an ordinary HTTP tunnel/LAN origin.
   if (crypto.randomUUID) return crypto.randomUUID();
