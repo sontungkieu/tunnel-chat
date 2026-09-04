@@ -3351,11 +3351,26 @@ class ChatHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         raw_path = parsed.path
         path = normalize_api_path(raw_path)
-        if path in {"/static/shared.js", "/static/desktop.js", "/static/desktop.css"}:
+        if path in {"/static/shared.js", "/static/desktop.js", "/static/rich-text.js", "/static/desktop.css"}:
             static_path = BASE_DIR / "static" / Path(path).name
             data = static_path.read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("content-type", "text/css; charset=utf-8" if path.endswith(".css") else "text/javascript; charset=utf-8")
+            self.send_header("cache-control", "no-store")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if raw_path.startswith("/static/vendor/"):
+            static_root = (BASE_DIR / "static" / "vendor").resolve()
+            static_path = (static_root / raw_path.removeprefix("/static/vendor/")).resolve()
+            if not static_path.is_relative_to(static_root) or not static_path.is_file():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            data = static_path.read_bytes()
+            content_type = mimetypes.guess_type(static_path.name)[0] or "application/octet-stream"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("content-type", content_type)
             self.send_header("cache-control", "no-store")
             self.send_header("content-length", str(len(data)))
             self.end_headers()

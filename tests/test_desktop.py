@@ -214,6 +214,10 @@ class DesktopTests(unittest.TestCase):
             self.assertIn(b'href="/chat/"', get("/codex")[1])
             self.assertIn(b'type="button" id="linkButton"', get("/codex")[1])
             self.assertEqual(get("/static/desktop.js")[0],200)
+            self.assertEqual(get("/static/rich-text.js")[0],200)
+            self.assertEqual(get("/static/vendor/katex-0.18.5.min.css")[0],200)
+            self.assertEqual(get("/static/vendor/fonts/KaTeX_Main-Regular.woff2")[0],200)
+            self.assertEqual(get("/static/vendor/../desktop.js")[0],404)
         finally:
             httpd.shutdown();httpd.server_close();thread.join()
 if __name__=="__main__":unittest.main()

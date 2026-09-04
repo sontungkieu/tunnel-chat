@@ -78,6 +78,34 @@ function textElement(tag,text,className) {
   const element=document.createElement(tag);element.textContent=String(text || "");
   if(className) element.className=className;return element;
 }
+function enhanceRichText(content) {
+  content.querySelectorAll("a").forEach(link=>{link.target="_blank";link.rel="noopener noreferrer";});
+  content.querySelectorAll("img").forEach(image=>{image.loading="lazy";image.referrerPolicy="no-referrer";});
+  content.querySelectorAll("pre").forEach(pre=>{
+    const code=pre.querySelector("code");
+    if(!code || pre.parentElement?.classList.contains("code-block"))return;
+    const language=Array.from(code.classList).find(name=>name.startsWith("language-"))?.slice(9) || "text";
+    const block=textElement("div","","code-block"),toolbar=textElement("div","","code-toolbar");
+    const copy=textElement("button","Sao chép","copy-code");copy.type="button";
+    copy.onclick=async()=>{
+      try {await navigator.clipboard.writeText(code.textContent || "");copy.textContent="Đã chép";}
+      catch(_error) {copy.textContent="Không chép được";}
+      setTimeout(()=>{if(copy.isConnected)copy.textContent="Sao chép";},1400);
+    };
+    toolbar.append(textElement("span",language),copy);
+    pre.replaceWith(block);block.append(toolbar,pre);
+  });
+}
+function richTextElement(source) {
+  const content=textElement("div","","rich-text");
+  try {
+    const rendered=window.TunnelRichText?.renderMarkdown(source);
+    if(rendered===null || rendered===undefined)throw new Error("rich text renderer unavailable");
+    // Raw source HTML is disabled in TunnelRichText; generated markup comes from markdown-it and KaTeX.
+    content.innerHTML=rendered;enhanceRichText(content);
+  } catch(_error) {content.textContent=String(source || "");content.classList.add("rich-text-fallback");}
+  return content;
+}
 function projectForChat(chat) {
   const path=String(chat.repo_path || "").replace(/[\\/]+$/,"");
   return {key:path.toLocaleLowerCase() || "__unknown__",
@@ -139,7 +167,7 @@ function renderState(state) {
       if(message.role==="tool") {fragment.append(toolCard(message));continue;}
       const card=textElement("article","","message "+message.role);
       card.append(textElement("div",message.role==="user"?"Bạn":"Codex","role"));
-      if(message.text)card.append(textElement("div",message.text));
+      if(message.text)card.append(richTextElement(message.text));
       if(Array.isArray(message.images) && message.images.length) {
         const gallery=textElement("div","","message-images");
         for(const image of message.images) {

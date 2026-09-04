@@ -158,6 +158,9 @@ values remain metadata and are never resolved as Linux paths.
   Windows (`/codex`) and independent Codex CLI sessions in WSL (`/codex/cli`).
 - Connected Desktop tasks are grouped by project in the sidebar; project groups
   can be collapsed and keep their state for the current browser session.
+- Desktop messages render local, sanitized Markdown with tables, lists, links,
+  fenced code and copy controls. KaTeX renders inline/display TeX, AMS-style
+  environments, matrices, cases, equation tags and accessible MathML without a CDN.
 - Mutation operation IDs are persisted. Completed operations are deduplicated;
   pending/uncertain operations are never replayed. After a timeout, inspect the
   task before sending again. Prompt uploads are consumed before dispatch, so
