@@ -156,6 +156,8 @@ values remain metadata and are never resolved as Linux paths.
   while running or failed calls stay open for inspection.
 - A Codex mode selector switches explicitly between ChatGPT app tasks on
   Windows (`/codex`) and independent Codex CLI sessions in WSL (`/codex/cli`).
+- Connected Desktop tasks are grouped by project in the sidebar; project groups
+  can be collapsed and keep their state for the current browser session.
 - Mutation operation IDs are persisted. Completed operations are deduplicated;
   pending/uncertain operations are never replayed. After a timeout, inspect the
   task before sending again. Prompt uploads are consumed before dispatch, so

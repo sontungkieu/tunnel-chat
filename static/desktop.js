@@ -7,6 +7,8 @@ const uploads = RLCSDTransport.createRpc({apiBase:"/c",token,retryLimit:1});
 let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
 let snapshot = null, busy = false, polling = false, requestKey = "", messageKey = "";
 let messageImageUrls = [], imageRenderRevision = 0;
+let collapsedProjects = new Set();
+try {collapsedProjects=new Set(JSON.parse(sessionStorage.getItem("desktopCollapsedProjects") || "[]"));} catch(_error) {}
 let transport = {chunkBytes:6144,concurrency:3,retryLimit:4};
 const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết nối Codex Desktop",
   cached:"Đang dùng snapshot đã tải",discovering:"Đang tìm tiến trình sở hữu task",
@@ -75,6 +77,14 @@ async function loadTask(payload) {
 function textElement(tag,text,className) {
   const element=document.createElement(tag);element.textContent=String(text || "");
   if(className) element.className=className;return element;
+}
+function projectForChat(chat) {
+  const path=String(chat.repo_path || "").replace(/[\\/]+$/,"");
+  return {key:path.toLocaleLowerCase() || "__unknown__",
+    name:path.split(/[\\/]/).filter(Boolean).at(-1) || "Chưa xác định",path};
+}
+function rememberProjectGroups() {
+  sessionStorage.setItem("desktopCollapsedProjects",JSON.stringify(Array.from(collapsedProjects)));
 }
 function releaseMessageImages() {
   for(const url of messageImageUrls) URL.revokeObjectURL(url);
@@ -188,20 +198,37 @@ function renderRequests(requests) {
 async function list() {
   const data=await rpc("list");transport=data.transport;
   $("taskList").replaceChildren();
+  const groups=new Map();
   for(const chat of data.chats) {
-    const button=textElement("button",chat.title,Number(chat.id)===active?"active":"");
-    button.disabled=busy;
-    button.onclick=async()=>{
-      if(busy) return;
-      setBusy(true);notice();
-      active=Number(chat.id);sessionStorage.setItem("desktopActiveChat",String(active));
-      snapshot=null;messageKey="";requestKey="";$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
-      updateControls();
-      try {await list();await refresh();}
-      catch(e) {notice(e.message);}
-      finally {setBusy(false);}
-    };
-    $("taskList").append(button);
+    const project=projectForChat(chat);
+    if(!groups.has(project.key))groups.set(project.key,{...project,chats:[]});
+    groups.get(project.key).chats.push(chat);
+  }
+  const ordered=Array.from(groups.values()).sort((a,b)=>a.name.localeCompare(b.name,"vi",{sensitivity:"base"}));
+  for(const group of ordered) {
+    const details=textElement("details","","project-group");
+    details.open=!collapsedProjects.has(group.key);
+    const summary=document.createElement("summary");summary.title=group.path || "Project chưa xác định";
+    summary.append(textElement("span",group.name,"project-name"),textElement("span",group.chats.length,"project-count"));
+    const tasks=textElement("div","","project-tasks");
+    for(const chat of group.chats) {
+      const button=textElement("button",chat.title,Number(chat.id)===active?"active":"");
+      button.disabled=busy;button.title=chat.title;
+      button.onclick=async()=>{
+        if(busy) return;
+        setBusy(true);notice();
+        active=Number(chat.id);sessionStorage.setItem("desktopActiveChat",String(active));
+        snapshot=null;messageKey="";requestKey="";$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
+        updateControls();
+        try {await list();await refresh();}
+        catch(e) {notice(e.message);}
+        finally {setBusy(false);}
+      };
+      tasks.append(button);
+    }
+    details.append(summary,tasks);
+    details.ontoggle=()=>{details.open?collapsedProjects.delete(group.key):collapsedProjects.add(group.key);rememberProjectGroups();};
+    $("taskList").append(details);
   }
   if(!data.chats.length) $("taskList").append(textElement("p","Chưa có task được kết nối.","muted"));
   if(active && !data.chats.some(c=>Number(c.id)===active)) active=0;
