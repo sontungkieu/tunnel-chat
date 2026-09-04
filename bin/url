@@ -2,7 +2,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-uv run python server.py init-env >/dev/null
+export PATH="$PWD/.tools:$PATH"
+uv run --frozen python server.py init-env >/dev/null
 set -a
 source .env.local
 set +a

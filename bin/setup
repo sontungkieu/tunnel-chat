@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TOOLS="$ROOT/.tools"
+mkdir -p "$TOOLS"
+export PATH="$TOOLS:$PATH"
+
+env_value() {
+    [ -f "$ROOT/.env.local" ] || return 0
+    sed -n "s/^$1=//p" "$ROOT/.env.local" | tail -n 1 | tr -d "'\"\r"
+}
+
+if ! command -v curl >/dev/null 2>&1; then
+    echo "curl is required. Install it in WSL, then run ./bin/setup again." >&2
+    exit 1
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+    installer="$(mktemp "$TOOLS/.uv-installer.XXXXXX")"
+    trap 'rm -f "${installer:-}" "${cloudflared_tmp:-}"' EXIT
+    echo "Installing uv into $TOOLS"
+    curl -LsSf --retry 3 https://astral.sh/uv/install.sh -o "$installer"
+    env UV_INSTALL_DIR="$TOOLS" UV_NO_MODIFY_PATH=1 sh "$installer"
+    rm -f "$installer"
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+    best_node=""
+    best_major=0
+    for candidate in "$HOME"/.nvm/versions/node/*/bin/node "$HOME"/.volta/bin/node "$HOME"/.local/bin/node; do
+        [ -x "$candidate" ] || continue
+        candidate_major="$("$candidate" -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
+        if [ "$candidate_major" -gt "$best_major" ]; then
+            best_node="$candidate"
+            best_major="$candidate_major"
+        fi
+    done
+    if [ -n "$best_node" ]; then
+        export PATH="$(dirname "$best_node"):$PATH"
+    fi
+fi
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    echo "WSL Node.js 18+ and npm are required. Install them, then run ./bin/setup again." >&2
+    exit 1
+fi
+node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
+if [ "$node_major" -lt 18 ]; then
+    echo "WSL Node.js 18+ is required; found $(node --version)." >&2
+    exit 1
+fi
+
+configured_cloudflared="$(env_value CLOUDFLARED_BIN)"
+if command -v cloudflared >/dev/null 2>&1; then
+    :
+elif [ -n "$configured_cloudflared" ] && [ -x "$configured_cloudflared" ]; then
+    export PATH="$(dirname "$configured_cloudflared"):$PATH"
+else
+    case "$(uname -m)" in
+        x86_64|amd64) cloudflared_arch=amd64 ;;
+        aarch64|arm64) cloudflared_arch=arm64 ;;
+        armv7l|armv6l) cloudflared_arch=arm ;;
+        i386|i686) cloudflared_arch=386 ;;
+        *) echo "Unsupported cloudflared architecture: $(uname -m)" >&2; exit 1 ;;
+    esac
+    cloudflared_tmp="$(mktemp "$TOOLS/.cloudflared.XXXXXX")"
+    trap 'rm -f "${installer:-}" "${cloudflared_tmp:-}"' EXIT
+    echo "Installing cloudflared into $TOOLS"
+    curl -fsSL --retry 3 \
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cloudflared_arch}" \
+        -o "$cloudflared_tmp"
+    chmod 700 "$cloudflared_tmp"
+    "$cloudflared_tmp" --version >/dev/null
+    mv "$cloudflared_tmp" "$TOOLS/cloudflared"
+fi
+
+cd "$ROOT"
+uv sync --frozen
+npm ci --omit=optional --ignore-scripts
+uv run --frozen python server.py init-env
+
+echo
+./bin/doctor
+echo
+echo "Setup complete. Run ./bin/start, then ./bin/url codex."

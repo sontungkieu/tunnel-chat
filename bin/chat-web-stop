@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-uv run python chatgpt-web/native-service.py stop
+export PATH="$PWD/.tools:$PATH"
+uv run --frozen python chatgpt-web/native-service.py stop

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-uv run python server.py init-env >/dev/null
+export PATH="$PWD/.tools:$PATH"
+uv run --frozen python server.py init-env >/dev/null
 
 set -a
 source .env.local
@@ -18,9 +19,12 @@ if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
 fi
 rm -f "$PID_FILE" "$URL_FILE"
 
-CLOUDFLARED=${CLOUDFLARED_BIN:-/home/tung/.local/bin/cloudflared}
+CLOUDFLARED=${CLOUDFLARED_BIN:-$(command -v cloudflared || true)}
+if [ -z "$CLOUDFLARED" ] && [ -x "$PWD/.tools/cloudflared" ]; then
+    CLOUDFLARED="$PWD/.tools/cloudflared"
+fi
 if [ ! -x "$CLOUDFLARED" ]; then
-    echo "cloudflared not found at $CLOUDFLARED" >&2
+    echo "cloudflared not found; run ./bin/setup" >&2
     exit 1
 fi
 
@@ -29,7 +33,7 @@ LOG_FILE="logs/quick-cloudflared.log"
 : > "$LOG_FILE"
 export CLOUDFLARED LOCAL_URL LOG_FILE
 
-uv run python - <<'PY'
+uv run --frozen python - <<'PY'
 from pathlib import Path
 import os
 import subprocess
@@ -60,7 +64,7 @@ time.sleep(4)
 os.kill(proc.pid, 0)
 PY
 
-uv run python - <<'PY'
+uv run --frozen python - <<'PY'
 from pathlib import Path
 import re
 import time

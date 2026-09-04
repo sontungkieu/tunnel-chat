@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -u
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export PATH="$ROOT/.tools:$PATH"
+require_desktop=0
+if [ "${1:-}" = "--desktop" ]; then
+    require_desktop=1
+elif [ $# -gt 0 ]; then
+    echo "usage: $0 [--desktop]" >&2
+    exit 2
+fi
+
+failures=0
+warnings=0
+pass() { printf 'ok    %s\n' "$1"; }
+warn() { printf 'warn  %s\n' "$1"; warnings=$((warnings + 1)); }
+fail() { printf 'fail  %s\n' "$1"; failures=$((failures + 1)); }
+env_value() {
+    [ -f "$ROOT/.env.local" ] || return 0
+    sed -n "s/^$1=//p" "$ROOT/.env.local" | tail -n 1 | tr -d "'\"\r"
+}
+
+if command -v uv >/dev/null 2>&1; then pass "uv: $(uv --version)"; else fail "uv is missing; run ./bin/setup"; fi
+node_bin="$(command -v node 2>/dev/null || true)"
+if [ -z "$node_bin" ]; then node_bin="$(env_value GATEWAY_NODE)"; fi
+if [ -n "$node_bin" ] && [ -x "$node_bin" ]; then
+    node_major="$("$node_bin" -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || echo 0)"
+    if [ "$node_major" -ge 18 ]; then pass "WSL Node: $("$node_bin" --version)"; else fail "WSL Node 18+ is required"; fi
+else
+    fail "WSL Node is missing"
+fi
+npm_bin="$(command -v npm 2>/dev/null || true)"
+if [ -z "$npm_bin" ] && [ -n "$node_bin" ]; then npm_bin="$(dirname "$node_bin")/npm"; fi
+if [ -x "$npm_bin" ]; then pass "npm: $(PATH="$(dirname "$node_bin"):$PATH" "$npm_bin" --version)"; else fail "npm is missing"; fi
+cloudflared_bin="$(command -v cloudflared 2>/dev/null || true)"
+if [ -z "$cloudflared_bin" ]; then cloudflared_bin="$(env_value CLOUDFLARED_BIN)"; fi
+if [ -n "$cloudflared_bin" ] && [ -x "$cloudflared_bin" ]; then
+    pass "cloudflared: $("$cloudflared_bin" --version | head -n 1)"
+else
+    fail "cloudflared is missing; run ./bin/setup"
+fi
+
+if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null; then
+    pass "WSL detected"
+else
+    warn "not running in WSL; Codex Desktop mode is unavailable"
+fi
+
+windows_node="/mnt/c/Program Files/nodejs/node.exe"
+if [ -x "$windows_node" ]; then
+    pass "Windows Node: $("$windows_node" --version | tr -d '\r')"
+elif [ "$require_desktop" -eq 1 ]; then
+    fail "Windows Node.js is required for Codex Desktop mode"
+else
+    warn "Windows Node.js is missing; WSL CLI mode remains available"
+fi
+
+if [ -f "$ROOT/.env.local" ]; then
+    pass ".env.local exists"
+    tunnel_mode="$(sed -n 's/^TUNNEL_MODE=//p' "$ROOT/.env.local" | tail -n 1 | tr -d "'\"\r")"
+    if [ -n "$tunnel_mode" ]; then pass "tunnel mode: $tunnel_mode"; else warn "TUNNEL_MODE is absent; ./bin/start will use quick"; fi
+else
+    fail ".env.local is missing; run ./bin/setup"
+fi
+
+for service in server gateway quick-cloudflared cloudflared; do
+    pid_file="$ROOT/run/$service.pid"
+    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+        pass "$service running (pid $(cat "$pid_file"))"
+    fi
+done
+
+printf '%s failure(s), %s warning(s)\n' "$failures" "$warnings"
+[ "$failures" -eq 0 ]

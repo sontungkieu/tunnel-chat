@@ -56,11 +56,9 @@ API_COMPAT_PREFIX = "/api"
 API_PREFIX = "/x"
 GET_RPC_PREFIX = "/g"
 CODEX_RPC_PREFIX = "/c"
-DEFAULT_CODEX_BIN = (
-    "/home/tung/.vscode-server/extensions/"
-    "openai.chatgpt-26.623.42026-linux-x64/bin/linux-x86_64/codex"
-)
-DEFAULT_CODEX_REPOS = ("/home/tung/RLCSD", "/home/tung/rlcsd-fix-chat")
+DEFAULT_CODEX_BIN = shutil.which("codex") or ""
+DEFAULT_CODEX_REPOS = (str(BASE_DIR),)
+DEFAULT_CODEX_HOME = str(Path.home() / ".codex")
 UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
 CODEX_RUNNERS: dict[int, subprocess.Popen[str]] = {}
 CODEX_RUNNERS_LOCK = threading.Lock()
@@ -100,7 +98,7 @@ def load_config() -> dict[str, str]:
         "chat_access_token": merged.get("CHAT_ACCESS_TOKEN", ""),
         "codex_bin": merged.get("CODEX_BIN", DEFAULT_CODEX_BIN),
         "codex_repos": merged.get("CODEX_REPOS", os.pathsep.join(DEFAULT_CODEX_REPOS)),
-        "codex_home": merged.get("CODEX_HOME", "/home/tung/.codex"),
+        "codex_home": merged.get("CODEX_HOME", DEFAULT_CODEX_HOME),
         "desktop_enabled": merged.get("DESKTOP_ENABLED", "0"),
         "desktop_node": merged.get("DESKTOP_NODE", ""),
         "desktop_staging_root": merged.get("DESKTOP_STAGING_ROOT", r"D:\dev\codex\tunnel-chat\attachments"),
@@ -217,19 +215,29 @@ def ensure_env() -> None:
     if ENV_PATH.exists():
         return
     token = secrets.token_urlsafe(24)
+    gateway_node = shutil.which("node") or ""
+    cloudflared = shutil.which("cloudflared") or str(BASE_DIR / ".tools" / "cloudflared")
+    desktop_node = Path("/mnt/c/Program Files/nodejs/node.exe")
+    desktop_enabled = desktop_node.is_file()
     content = (
         "HOST=127.0.0.1\n"
         f"PORT={DEFAULT_PORT}\n"
         f"CHAT_ACCESS_TOKEN={token}\n"
+        "TUNNEL_MODE=quick\n"
         "PUBLIC_URL=\n"
-        "SECRETS_ENV=/home/tung/2025.2-IT3180E-SE/.secrets/.env\n"
+        "SECRETS_ENV=\n"
+        f"CLOUDFLARED_BIN='{cloudflared}'\n"
+        f"GATEWAY_NODE='{gateway_node}'\n"
         f"UPLOAD_CHUNK_BYTES={DEFAULT_UPLOAD_CHUNK_BYTES}\n"
         f"UPLOAD_CONCURRENCY={DEFAULT_UPLOAD_CONCURRENCY}\n"
         f"UPLOAD_RETRY_LIMIT={DEFAULT_UPLOAD_RETRY_LIMIT}\n"
         f"UPLOAD_TTL_SECONDS={DEFAULT_UPLOAD_TTL_SECONDS}\n"
-        f"CODEX_BIN={DEFAULT_CODEX_BIN}\n"
-        f"CODEX_REPOS={os.pathsep.join(DEFAULT_CODEX_REPOS)}\n"
-        "CODEX_HOME=/home/tung/.codex\n"
+        f"CODEX_BIN='{DEFAULT_CODEX_BIN}'\n"
+        f"CODEX_REPOS='{os.pathsep.join(DEFAULT_CODEX_REPOS)}'\n"
+        f"CODEX_HOME='{DEFAULT_CODEX_HOME}'\n"
+        f"DESKTOP_ENABLED={'1' if desktop_enabled else '0'}\n"
+        f"DESKTOP_NODE='{desktop_node if desktop_enabled else ''}'\n"
+        "DESKTOP_STAGING_ROOT='D:\\dev\\codex\\tunnel-chat\\attachments'\n"
     )
     old_umask = os.umask(0o177)
     try:
@@ -1435,7 +1443,7 @@ def run_codex_turn(chat_id: int, prompt: str, attachment_ids: list[int] | None =
     output_path = Path(tempfile.gettempdir()) / f"rlcsd-codex-last-{chat_id}-{os.getpid()}-{threading.get_ident()}.txt"
     config = load_config()
     env = os.environ.copy()
-    env["CODEX_HOME"] = config.get("codex_home") or "/home/tung/.codex"
+    env["CODEX_HOME"] = config.get("codex_home") or DEFAULT_CODEX_HOME
     codex_bin = get_codex_bin()
     chat_attachments_dir = CODEX_ATTACHMENTS_DIR / str(chat_id)
     chat_attachments_dir.mkdir(parents=True, exist_ok=True)

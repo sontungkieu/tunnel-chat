@@ -41,6 +41,20 @@ class ServerTestCase(unittest.TestCase):
             conn.commit()
             return int(cursor.lastrowid)
 
+    def test_generated_env_is_portable_and_uses_quick_tunnel(self) -> None:
+        env_path = Path(self.temp_dir.name) / ".env.local"
+        with mock.patch.object(server, "ENV_PATH", env_path):
+            server.ensure_env()
+            values = server.parse_env_file(env_path)
+
+        self.assertEqual(values["TUNNEL_MODE"], "quick")
+        self.assertEqual(values["SECRETS_ENV"], "")
+        self.assertEqual(values["CODEX_REPOS"], str(server.BASE_DIR))
+        self.assertEqual(values["CODEX_HOME"], str(Path.home() / ".codex"))
+        self.assertTrue(values["CHAT_ACCESS_TOKEN"])
+        self.assertNotIn("2025.2-IT3180E-SE", env_path.read_text(encoding="utf-8"))
+        self.assertEqual(env_path.stat().st_mode & 0o777, 0o600)
+
     def test_queue_upload_reports_missing_chunks_and_finishes(self) -> None:
         chunk_size = server.upload_chunk_bytes()
         data = (b"traceback line\n" * 700)[: chunk_size + 321]

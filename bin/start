@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-uv run python server.py init-env >/dev/null
-uv run python service.py start
+export PATH="$PWD/.tools:$PATH"
+uv run --frozen python server.py init-env >/dev/null
+uv run --frozen python service.py start
 
 set -a
 source .env.local
 set +a
-case "${TUNNEL_MODE:-local}" in
+case "${TUNNEL_MODE:-quick}" in
     local|none|"") ;;
     quick) ./bin/quick-tunnel ;;
     persistent|named) ./bin/tunnel ;;
