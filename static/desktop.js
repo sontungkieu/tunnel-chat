@@ -12,6 +12,9 @@ const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết 
   "loading-history":"Đang yêu cầu toàn bộ lịch sử",
   "receiving-history":"Đang nhận snapshot lịch sử", "waiting-snapshot":"Đang chờ snapshot",
   projecting:"Đang dựng giao diện",complete:"Đã tải xong"};
+const activityLabels={thinking:"Đang suy nghĩ",tool:"Đang chạy công cụ",waiting:"Đang chờ bạn",
+  finalizing:"Đang hoàn tất câu trả lời",working:"Agent đang làm việc",completed:"Đã trả lời xong",
+  interrupted:"Đã dừng",failed:"Có lỗi",idle:"Sẵn sàng"};
 const wait=milliseconds=>new Promise(resolve=>setTimeout(resolve,milliseconds));
 function operationId() {
   // crypto.randomUUID is unavailable on an ordinary HTTP tunnel/LAN origin.
@@ -57,7 +60,8 @@ function renderState(state) {
   snapshot=state;
   $("title").textContent=state.title;
   $("meta").textContent=[state.model,state.cwd,"Desktop · local"].filter(Boolean).join(" · ");
-  $("status").textContent=state.status==="running"?"Agent đang chạy":"Sẵn sàng";
+  $("status").textContent=activityLabels[state.activity] || (state.status==="running"?"Agent đang làm việc":"Sẵn sàng");
+  $("status").dataset.activity=state.activity || state.status;
   updateControls();
   const next=JSON.stringify(state.messages);
   if(next!==messageKey) {

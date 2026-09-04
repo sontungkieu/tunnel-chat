@@ -39,6 +39,25 @@ test('canonical history is ordered and hidden reasoning is omitted',()=>{
   assert.ok(!JSON.stringify(view).includes('must not be exported'));
   assert.equal(view.cwd,'D:\\work');
 });
+test('turn activity distinguishes thinking, tools, waiting and finished states',()=>{
+  const completed=sample();completed.threadRuntimeStatus={type:'active'};
+  assert.equal(projectState(completed,1).status,'idle');
+  assert.equal(projectState(completed,1).activity,'completed');
+  const thinking=sample();thinking.turns[0].status='inProgress';
+  thinking.turns[0].items.push({type:'reasoning',id:'r'});
+  assert.equal(projectState(thinking,2).activity,'thinking');
+  const tool=sample();tool.turns[0].status='inProgress';
+  tool.turns[0].items.push({type:'commandExecution',id:'c',status:'inProgress'});
+  assert.equal(projectState(tool,3).activity,'tool');
+  const waiting=sample();waiting.turns[0].status='inProgress';
+  waiting.requests=[{id:'q',method:'item/tool/requestUserInput',params:{questions:[]}}];
+  assert.equal(projectState(waiting,4).activity,'waiting');
+  const finalizing=sample();finalizing.turns[0].status='inProgress';
+  finalizing.turns[0].items.push({type:'agentMessage',id:'f',text:'done',phase:'final'});
+  assert.equal(projectState(finalizing,5).activity,'finalizing');
+  const interrupted=sample();interrupted.turns[0].status='interrupted';
+  assert.equal(projectState(interrupted,6).activity,'interrupted');
+});
 test('projected history stays bounded to the latest 600 messages',()=>{
   const s=sample();s.turns=Array.from({length:700},(_,i)=>({turnId:`turn-${i}`,status:'completed',
     params:{input:[{type:'text',text:`message-${i}`}]},items:[]}));

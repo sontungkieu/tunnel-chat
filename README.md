@@ -142,6 +142,9 @@ values remain metadata and are never resolved as Linux paths.
   run as background jobs so the HTTPS request does not time out. The page reports
   the current IPC stage, elapsed seconds, and received bytes/percentage while a
   large snapshot frame is arriving.
+- The selected task reports its latest turn state separately: thinking, running a
+  tool, waiting for user input, finalizing, completed, interrupted, or failed.
+  A connected desktop runtime by itself is not treated as an active assistant turn.
 - Mutation operation IDs are persisted. Completed operations are deduplicated;
   pending/uncertain operations are never replayed. After a timeout, inspect the
   task before sending again. Prompt uploads are consumed before dispatch, so

@@ -99,6 +99,29 @@ function turnsOf(state) {
 function textInput(input) {
   return (Array.isArray(input) ? input : []).filter(i=>i.type==='text').map(i=>i.text || '').join('\n');
 }
+const TERMINAL_ITEM_STATUSES=new Set(['completed','failed','declined','cancelled','canceled','interrupted']);
+function activityOf(state, latestTurn, activeTurn) {
+  if ((state.requests || []).length) return 'waiting';
+  if (!activeTurn) {
+    const status=String(latestTurn?.status || '').toLowerCase();
+    if(status==='completed')return 'completed';
+    if(['interrupted','cancelled','canceled'].includes(status))return 'interrupted';
+    if(['failed','error'].includes(status) || latestTurn?.error)return 'failed';
+    return 'idle';
+  }
+  const items=activeTurn.items || [];
+  const unfinishedTool=[...items].reverse().find(item=>
+    ['commandExecution','fileChange'].includes(item.type) &&
+    !TERMINAL_ITEM_STATUSES.has(String(item.status || '').toLowerCase()));
+  if(unfinishedTool)return 'tool';
+  const latestItem=items.at(-1);
+  if(latestItem?.type==='reasoning')return 'thinking';
+  if(['webSearch','mcpToolCall','dynamicToolCall','toolCall'].includes(latestItem?.type) &&
+    !TERMINAL_ITEM_STATUSES.has(String(latestItem.status || '').toLowerCase()))return 'tool';
+  if(['agentMessage','assistantMessage'].includes(latestItem?.type))
+    return latestItem.phase==='final' ? 'finalizing' : 'working';
+  return 'working';
+}
 function projectState(state, revision) {
   if (!state || typeof state.id !== 'string') throw Error('Unsupported desktop state');
   const turns = turnsOf(state);
@@ -124,13 +147,14 @@ function projectState(state, revision) {
         addMessage({id:item.id,role:'tool',text:'File changes',status:item.status});
     }
   }
-  const active = [...turns].reverse().find(t=>t.status==='inProgress');
-  const running = state.threadRuntimeStatus?.type === 'active' ||
-    (!!active && state.threadRuntimeStatus?.type !== 'idle');
+  const latest=turns.at(-1);
+  const active=latest?.status==='inProgress' ? latest : null;
+  const activity=activityOf(state,latest,active);
+  const running=!!active || activity==='waiting';
   return {threadId:state.id,title:state.title || state.generatedTitle || state.id,
     cwd:state.cwd || '',backend:'desktop',hostId:'local',
-    model:state.latestModel || '',status:running?'running':'idle',
-    activeTurnId:running ? active?.turnId || null : null,revision,
+    model:state.latestModel || '',status:running?'running':'idle',activity,
+    activeTurnId:active?.turnId || null,revision,
     messages,
     requests:(state.requests || []).map(r=>({id:r.id,method:r.method,params:r.params})),
     historyTruncated:messageCount>MAX_PROJECTED_MESSAGES};
