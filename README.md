@@ -213,7 +213,9 @@ not sent to the server. The client removes it from the address bar, stores it in
 `sessionStorage` and sends it only in the `x-chat-token` header. Old localStorage
 tokens/query links migrate once in the browser. APIs no longer authenticate with
 query tokens; replace old links because their initial query navigation still
-passes through HTTP infrastructure.
+passes through HTTP infrastructure. Opening the bare `/codex` URL does not start
+an authenticated session: the page explains that the token is missing and keeps
+task controls disabled until it is reopened through the generated launcher URL.
 
 Treat generated links as credentials. Use HTTPS for tunnel access. The company
 proxy must preserve the custom auth header; there is no query-token fallback.

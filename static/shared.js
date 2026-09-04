@@ -123,7 +123,7 @@
     return await options.rpc(paths.finish, {upload_id: uploadId}, {attempts: 1});
   }
 
-  function accessToken() {
+  function accessToken(options = {}) {
     const fragment = new URLSearchParams(location.hash.slice(1));
     const query = new URLSearchParams(location.search);
     // Migrate old links/storage once, then remove the credential from the address bar.
@@ -134,7 +134,11 @@
     fragment.delete("token");
     history.replaceState(null, "", location.pathname + (query.size ? "?" + query : "") +
       (fragment.size ? "#" + fragment : ""));
-    if (!token) token = prompt("Access token") || "";
+    if (!token && options.promptIfMissing !== false) {
+      // Embedded browsers can reject modal prompts during page startup. Keep
+      // authentication optional for callers that provide an in-page fallback.
+      try { token = prompt("Access token") || ""; } catch { token = ""; }
+    }
     if (token) sessionStorage.setItem("tunnelChatToken", token);
     return token;
   }

@@ -1,7 +1,7 @@
 /* global RLCSDTransport */
 "use strict";
 const $ = id => document.getElementById(id);
-const token = RLCSDTransport.accessToken();
+const token = RLCSDTransport.accessToken({promptIfMissing:false});
 const rpc = RLCSDTransport.createRpc({apiBase:"/d",token,retryLimit:1});
 const uploads = RLCSDTransport.createRpc({apiBase:"/c",token,retryLimit:1});
 let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
@@ -16,13 +16,15 @@ function operationId() {
 }
 function notice(text="") {$("notice").textContent=text;$("notice").hidden=!text;}
 function updateControls() {
-  $("send").disabled=busy || !snapshot;
-  $("stop").disabled=busy || !snapshot?.activeTurnId;
-  $("linkButton").disabled=busy;
-  $("files").disabled=busy;
-  $("mode").disabled=busy;
-  $("prompt").disabled=busy;
-  $("reconnect").disabled=busy;
+  const unavailable=busy || !token;
+  $("send").disabled=unavailable || !snapshot;
+  $("stop").disabled=unavailable || !snapshot?.activeTurnId;
+  $("thread").disabled=unavailable;
+  $("linkButton").disabled=unavailable;
+  $("files").disabled=unavailable;
+  $("mode").disabled=unavailable;
+  $("prompt").disabled=unavailable;
+  $("reconnect").disabled=unavailable;
   $("logout").disabled=busy;
   document.querySelectorAll("#requests button").forEach(b=>b.disabled=busy);
   document.querySelectorAll("#taskList button").forEach(b=>b.disabled=busy);
@@ -124,6 +126,7 @@ $("linkForm").onsubmit=async event=>{
     $("files").value="";$("filesLabel").textContent="";await list();
   }catch(e){notice(e.message);}finally{setBusy(false);}
 };
+$("linkButton").onclick=()=>$("linkForm").requestSubmit();
 $("reconnect").onclick=()=>{notice();refresh(true);};
 $("files").onchange=()=>{
   const files=Array.from($("files").files);
@@ -174,6 +177,11 @@ $("logout").onclick=()=>{
   sessionStorage.removeItem("tunnelChatToken");localStorage.removeItem("fixChatToken");location.reload();
 };
 (async()=>{
+  if(!token) {
+    notice("Phiên trình duyệt này chưa có token Codex. Hãy mở lại bằng launcher Codex trên máy cá nhân hoặc dùng liên kết xác thực do launcher tạo.");
+    updateControls();
+    return;
+  }
   try {await list();await refresh();}catch(e){notice(e.message);}
   // The bridge consumes live IPC patches; browsers poll its bounded projection.
   // No model call or history reload is performed by an ordinary poll.

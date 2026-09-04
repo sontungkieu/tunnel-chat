@@ -149,6 +149,7 @@ class DesktopTests(unittest.TestCase):
             for path in ("/codex", "/codex/cli", "/queue"):
                 self.assertEqual(get(path)[0],200)
             self.assertIn(b'href="/chat/"', get("/codex")[1])
+            self.assertIn(b'type="button" id="linkButton"', get("/codex")[1])
             self.assertEqual(get("/static/desktop.js")[0],200)
         finally:
             httpd.shutdown();httpd.server_close();thread.join()

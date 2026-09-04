@@ -27,6 +27,11 @@ async function main() {
   assert.equal(session.get("tunnelChatToken"),"new");
   assert.equal(local.has("fixChatToken"),false);
 
+  session.clear();
+  global.location={pathname:"/codex",search:"",hash:""};
+  global.prompt=()=>{throw new Error("modal prompts are unavailable")};
+  assert.equal(RLCSDTransport.accessToken({promptIfMissing:false}),"");
+
   const received = new Set();
   const failedOnce = new Set();
   let active = 0;
