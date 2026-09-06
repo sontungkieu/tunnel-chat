@@ -142,8 +142,11 @@ values remain metadata and are never resolved as Linux paths.
 - Send a new turn while idle. To steer a running turn, explicitly select
   **Chỉ dẫn cho lượt đang chạy**.
 - Stop uses the exact displayed active turn ID. It never kills the shared app.
-- Command/file approvals offer one-time accept or decline. User-input questions
-  can be answered on the page; other request types direct you to the app.
+- Command/file approvals can be reviewed and answered remotely. The page shows
+  only the exact choices advertised by Codex Desktop: one-time approval,
+  session-scoped approval, command/network policy amendments, decline or cancel
+  when each choice is available. A decision is accepted only while the same
+  request is still pending; user-input questions can also be answered on the page.
 - **Kết nối lại** rediscovers the owner and requests a fresh snapshot. After a
   server restart, select a linked task to reconnect. Initial loads and reconnects
   run as background jobs so the HTTPS request does not time out. The page reports
@@ -201,7 +204,7 @@ they do not submit a live model turn.
 Desktop mode supports local Codex tasks, not ordinary ChatGPT cloud conversations
 or remote hosts. The page displays the most recent 600 message/activity entries;
 reasoning and configuration are not exported. Use the desktop app for task
-creation, model/runtime changes, unsupported approvals and older history.
+creation, model/runtime changes, request types the page cannot render and older history.
 
 ## WSL CLI and manual queue
 

@@ -195,17 +195,59 @@ async function reply(request,data) {
   try {await rpc("reply",{chat_id:active,requestId:request.id,operation_id:operationId(),...data});await refresh();}
   catch(e){notice(e.message);}finally{setBusy(false);}
 }
+function approvalDecisionKind(decision) {
+  if(typeof decision==="string" && ["accept","acceptForSession","decline","cancel"].includes(decision))return decision;
+  if(!decision || Array.isArray(decision) || typeof decision!=="object")return "";
+  const keys=Object.keys(decision);
+  return keys.length===1 && ["acceptWithExecpolicyAmendment","applyNetworkPolicyAmendment"].includes(keys[0])
+    && decision[keys[0]] && typeof decision[keys[0]]==="object" ? keys[0] : "";
+}
+const approvalLabels={accept:"Cho phép lần này",acceptForSession:"Cho phép trong phiên",
+  decline:"Từ chối, tiếp tục",cancel:"Hủy lượt",
+  acceptWithExecpolicyAmendment:"Cho phép và nhớ tiền tố lệnh",
+  applyNetworkPolicyAmendment:"Cho phép host theo quy tắc"};
+const approvalNotes={accept:"Chỉ áp dụng cho yêu cầu này.",
+  acceptForSession:"Codex có thể tái dùng quyền tương ứng đến hết phiên hiện tại.",
+  decline:"Không thực hiện hành động này; task có thể tiếp tục theo cách khác.",
+  cancel:"Dừng lượt hiện tại.",
+  acceptWithExecpolicyAmendment:"Cho phép và lưu đúng quy tắc lệnh do Codex Desktop đề xuất.",
+  applyNetworkPolicyAmendment:"Cho phép và lưu đúng quy tắc mạng do Codex Desktop đề xuất."};
+function approvalSummary(request) {
+  const params=request.params || {},lines=[];
+  const command=params.command || params.cmd;
+  if(command)lines.push(`Lệnh: ${Array.isArray(command)?command.join(" "):command}`);
+  if(params.cwd)lines.push(`Thư mục: ${params.cwd}`);
+  if(params.reason)lines.push(`Lý do: ${params.reason}`);
+  if(params.host)lines.push(`Host: ${params.host}`);
+  if(params.networkApprovalContext?.host)lines.push(`Host: ${params.networkApprovalContext.host}`);
+  if(params.changes)lines.push(`Thay đổi file: ${typeof params.changes==="string"?params.changes:JSON.stringify(params.changes,null,2)}`);
+  return lines.join("\n") || "Codex Desktop yêu cầu bạn quyết định trước khi tiếp tục.";
+}
 function renderRequests(requests) {
   $("requests").replaceChildren();
   for(const request of requests) {
     const box=textElement("div","","request");
-    box.append(textElement("strong","Task cần bạn trả lời"),textElement("div",request.method,"small"));
+    box.append(textElement("strong","Task cần bạn trả lời"),textElement("div",request.method,"small muted"));
     if(["item/commandExecution/requestApproval","item/fileChange/requestApproval"].includes(request.method)) {
-      box.append(textElement("pre",JSON.stringify(request.params,null,2)));
-      for(const [label,decision] of [["Cho phép lần này","accept"],["Từ chối","decline"]]) {
-        if(request.params?.availableDecisions && !request.params.availableDecisions.includes(decision)) continue;
-        const button=textElement("button",label);button.onclick=()=>reply(request,{decision});box.append(button);
+      const type=request.params?.kind==="writeStdin"?"Yêu cầu gửi dữ liệu vào terminal"
+        :request.method.includes("commandExecution")?"Yêu cầu chạy lệnh":"Yêu cầu sửa file";
+      box.append(textElement("div",type,"approval-title"),textElement("pre",approvalSummary(request),"approval-summary"));
+      const details=document.createElement("details"),summary=document.createElement("summary");
+      summary.textContent="Xem dữ liệu đầy đủ";
+      details.append(summary,textElement("pre",JSON.stringify(request.params,null,2)));box.append(details);
+      const offered=Array.isArray(request.params?.availableDecisions)
+        ? request.params.availableDecisions : ["accept","decline"];
+      const actions=textElement("div","","approval-actions");
+      for(const decision of offered) {
+        const kind=approvalDecisionKind(decision);if(!kind)continue;
+        const choice=textElement("div","","approval-choice"),button=textElement("button",approvalLabels[kind] || kind);
+        if(["decline","cancel"].includes(kind))button.classList.add("danger");
+        else if(kind!=="accept")button.classList.add("secondary");
+        button.onclick=()=>reply(request,{decision,expectedTurnId:request.params?.turnId || snapshot?.activeTurnId || null});
+        choice.append(button,textElement("span",approvalNotes[kind] || "","approval-choice-note"));actions.append(choice);
       }
+      if(!actions.children.length)actions.append(textElement("p","Codex Desktop chưa cung cấp lựa chọn có thể gửi từ web.","muted"));
+      box.append(actions);
     } else if(request.method==="item/tool/requestUserInput") {
       const inputs={};
       for(const question of request.params.questions || []) {

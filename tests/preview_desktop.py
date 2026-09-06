@@ -47,7 +47,9 @@ def loss(theta):
         {"id":"tool-done","role":"tool","text":"python -m unittest discover -s tests","status":"completed"},
         {"id":"tool-live","role":"tool","text":"uv run python preview.py","status":"inProgress"}],
     "requests":[{"id":"test-approval","method":"item/commandExecution/requestApproval",
-                 "params":{"command":"echo preview","availableDecisions":["accept","decline"]}}],
+                 "params":{"command":"echo preview","cwd":r"D:\dev\demo","reason":"Kiểm thử phê duyệt từ xa",
+                           "turnId":"demo-turn",
+                           "availableDecisions":["accept","acceptForSession","decline","cancel"]}}],
     "historyTruncated":False}
 
 def fake_call(config,action,task=None,data=None,refresh=False,progress=None,timeout=None):

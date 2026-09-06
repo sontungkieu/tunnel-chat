@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
+const {isDeepStrictEqual} = require('node:util');
 const {EventEmitter} = require('node:events');
 const MAX_FRAME = 128 * 1024 * 1024;
 const MAX_PROJECTED_MESSAGES = 600;
@@ -14,6 +15,32 @@ const VERSIONS = {'initialize':0, 'thread-owner-discovery':1,
   'thread-follower-steer-turn':1, 'thread-follower-interrupt-turn':4,
   'thread-follower-command-approval-decision':1, 'thread-follower-file-approval-decision':1,
   'thread-follower-submit-user-input':1};
+const SIMPLE_APPROVAL_DECISIONS=new Set(['accept','acceptForSession','decline','cancel']);
+const STRUCTURED_APPROVAL_DECISIONS=new Set([
+  'acceptWithExecpolicyAmendment','applyNetworkPolicyAmendment',
+]);
+function approvalDecisionKind(decision) {
+  if (typeof decision==='string') return SIMPLE_APPROVAL_DECISIONS.has(decision) ? decision : null;
+  if (!decision || Array.isArray(decision) || Object.getPrototypeOf(decision)!==Object.prototype) return null;
+  const keys=Object.keys(decision);
+  if (keys.length!==1 || !STRUCTURED_APPROVAL_DECISIONS.has(keys[0])) return null;
+  const value=decision[keys[0]];
+  return value && typeof value==='object' && !Array.isArray(value) ? keys[0] : null;
+}
+function validateApprovalDecision(request, decision) {
+  if (!approvalDecisionKind(decision)) throw Error('Invalid approval decision');
+  const encoded=JSON.stringify(decision);
+  if (Buffer.byteLength(encoded)>64*1024) throw Error('Approval decision exceeds limit');
+  const offered=request.params?.availableDecisions;
+  if (Array.isArray(offered)) {
+    const match=offered.some(candidate=>approvalDecisionKind(candidate) && isDeepStrictEqual(candidate,decision));
+    if (!match) throw Error('Decision is not offered by the app');
+  } else if (!['accept','decline'].includes(decision)) {
+    // Older app snapshots did not advertise choices. Keep that fallback narrowly scoped.
+    throw Error('Decision is not offered by the app');
+  }
+  return structuredClone(decision);
+}
 function frame(message) {
   const body = Buffer.from(JSON.stringify(message));
   if (body.length > MAX_FRAME) throw Error('IPC frame exceeds limit');
@@ -367,10 +394,11 @@ class DesktopClient extends EventEmitter {
       const approval={'item/commandExecution/requestApproval':'thread-follower-command-approval-decision',
         'item/fileChange/requestApproval':'thread-follower-file-approval-decision'};
       if (approval[req.method]) {
-        if (!['accept','decline'].includes(data.decision)) throw Error('Invalid approval decision');
-        if (req.params?.availableDecisions && !req.params.availableDecisions.includes(data.decision))
-          throw Error('Decision is not offered by the app');
-        method=approval[req.method];params.decision=data.decision;
+        const requestTurnId=typeof req.params?.turnId==='string' ? req.params.turnId : null;
+        const approvalTurnId=requestTurnId || snapshot.activeTurnId;
+        if (approvalTurnId && data.expectedTurnId!==approvalTurnId)
+          throw Error('Approval turn changed; refresh before replying.');
+        method=approval[req.method];params.decision=validateApprovalDecision(req,data.decision);
       } else if (req.method==='item/tool/requestUserInput') {
         const answers={};
         for (const question of req.params.questions || []) {
@@ -418,5 +446,6 @@ async function main() {
   });
   lines.on('close',()=>{chain.finally(()=>{client.close();process.stdout.end();});});
 }
-module.exports={Decoder,frame,applyPatches,turnsOf,projectState,DesktopClient,stageAttachment};
+module.exports={Decoder,frame,applyPatches,turnsOf,projectState,approvalDecisionKind,
+  validateApprovalDecision,DesktopClient,stageAttachment};
 if (require.main===module) main().catch(()=>process.exit(1));

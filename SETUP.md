@@ -40,6 +40,11 @@ Mở task đích trong Codex Desktop trên máy cá nhân, sao chép
 **Kết nối**. Máy cá nhân phải còn thức, ứng dụng Codex phải chạy và WSL không
 bị tắt.
 
+Khi task xin quyền chạy lệnh hoặc sửa file, yêu cầu sẽ hiện ngay trên `/codex`.
+Đọc lệnh/thay đổi rồi chọn một trong đúng các phương án do Codex Desktop cung
+cấp, chẳng hạn cho phép một lần, cho phép trong phiên, từ chối hoặc hủy lượt.
+Trang không tự động phê duyệt và không tự tạo quyền rộng hơn lựa chọn của app.
+
 Các file cục bộ được tạo khi setup/chạy:
 
 - `.env.local`: token và cấu hình riêng của máy; mode mặc định là `quick`.
@@ -106,4 +111,3 @@ khi chuyển dữ liệu quan trọng giữa máy.
 
 Muốn dùng hostname cố định, cấu hình named tunnel riêng rồi đổi
 `TUNNEL_MODE=persistent`. Quick Tunnel vẫn là mặc định của bản clone mới.
-

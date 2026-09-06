@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict');
 const net=require('node:net');
 const {test}=require('node:test');
-const {Decoder,frame,applyPatches,projectState,DesktopClient}=require('../desktop_ipc.cjs');
+const {Decoder,frame,applyPatches,projectState,validateApprovalDecision,DesktopClient}=require('../desktop_ipc.cjs');
 const ID='11111111-1111-4111-8111-111111111111';
 const sample=()=>({id:ID,title:'test',cwd:'D:\\work',latestModel:'test-model',threadRuntimeStatus:{type:'idle'},
   turns:[{turnId:'turn-1',status:'completed',params:{input:[{type:'text',text:'hello'}]},
@@ -163,15 +163,27 @@ test('mutation timeout is never automatically retried',async t=>{
 });
 test('approvals must match a live pending request and stay scoped to one action',async t=>{
   const f=await fixture(t),s=sample();
-  s.requests=[{id:7,method:'item/commandExecution/requestApproval',params:{availableDecisions:['accept','decline']}},
+  s.requests=[{id:7,method:'item/commandExecution/requestApproval',params:{turnId:'turn-1',
+      availableDecisions:['accept','acceptForSession','decline','cancel']}},
     {id:'q',method:'item/tool/requestUserInput',params:{questions:[{id:'question'}]}}];f.setState(s);
   await f.client.state(ID);
   await assert.rejects(f.client.act(ID,'reply',{requestId:'missing',decision:'accept'}),/no longer pending/);
-  await assert.rejects(f.client.act(ID,'reply',{requestId:7,decision:'acceptForSession'}),/Invalid/);
-  await f.client.act(ID,'reply',{requestId:7,decision:'accept'});
-  assert.deepEqual(f.seen.at(-1).params,{conversationId:ID,requestId:'7',decision:'accept'});
+  await assert.rejects(f.client.act(ID,'reply',{requestId:7,decision:'accept',expectedTurnId:'stale'}),/turn changed/);
+  await f.client.act(ID,'reply',{requestId:7,decision:'acceptForSession',expectedTurnId:'turn-1'});
+  assert.deepEqual(f.seen.at(-1).params,{conversationId:ID,requestId:'7',decision:'acceptForSession'});
   await f.client.act(ID,'reply',{requestId:'q',answers:{question:'my answer'}});
   assert.deepEqual(f.seen.at(-1).params.response,{answers:{question:{answers:['my answer']}}});
+});
+
+test('structured approvals must exactly match an app-advertised decision',()=>{
+  const offered={acceptWithExecpolicyAmendment:{execpolicy_amendment:['git','status']}};
+  const request={params:{availableDecisions:[offered,'decline']}};
+  assert.deepEqual(validateApprovalDecision(request,structuredClone(offered)),offered);
+  assert.throws(()=>validateApprovalDecision(request,
+    {acceptWithExecpolicyAmendment:{execpolicy_amendment:['git','push']}}),/not offered/);
+  assert.throws(()=>validateApprovalDecision(request,{unexpected:{allow:true}}),/Invalid/);
+  assert.throws(()=>validateApprovalDecision({params:{}},'acceptForSession'),/not offered/);
+  assert.equal(validateApprovalDecision({params:{}},'accept'),'accept');
 });
 
 test('a rejected handshake closes its socket and a later connection can recover',async t=>{
