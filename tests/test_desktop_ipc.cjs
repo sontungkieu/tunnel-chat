@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict');
 const net=require('node:net');
 const {test}=require('node:test');
-const {Decoder,frame,applyPatches,projectState,validateApprovalDecision,DesktopClient}=require('../desktop_ipc.cjs');
+const {Decoder,frame,applyPatches,projectState,validateApprovalDecision,normalizeUserInputResponse,DesktopClient}=require('../desktop_ipc.cjs');
 const ID='11111111-1111-4111-8111-111111111111';
 const sample=()=>({id:ID,title:'test',cwd:'D:\\work',latestModel:'test-model',threadRuntimeStatus:{type:'idle'},
   turns:[{turnId:'turn-1',status:'completed',params:{input:[{type:'text',text:'hello'}]},
@@ -50,6 +50,19 @@ test('projected user messages remove app context and canonical duplicates',()=>{
   assert.deepEqual(users,[{id:'u',role:'user',text:'hello',images:[image]}]);
   assert.equal(view.project,'research_vdt');
   assert.equal(view.projectPath,'D:\\dev\\codex\\research_vdt');
+});
+test('question replies are projected as readable text without internal envelopes',()=>{
+  const s=sample();
+  const reply='<send_user_message_question_reply>\n'+JSON.stringify([{
+    questionItemId:'internal-id',question:'Cho phép commit rồi push?',answer:'Cho phép riêng lần này',
+  }])+'\n</send_user_message_question_reply>';
+  s.turns[0].params.input=[{type:'text',text:reply}];
+  s.turns[0].items.unshift({type:'userMessage',id:'question-reply',content:[{type:'text',text:reply}]});
+  const users=projectState(s,1).messages.filter(message=>message.role==='user');
+  assert.deepEqual(users,[{id:'question-reply',role:'user',text:
+    'Đã trả lời câu hỏi\n\nCâu hỏi: Cho phép commit rồi push?\n\nTrả lời: Cho phép riêng lần này',images:[]}]);
+  assert.ok(!JSON.stringify(users).includes('questionItemId'));
+  assert.ok(!JSON.stringify(users).includes('send_user_message_question_reply'));
 });
 test('image-only user messages remain visible',()=>{
   const s=sample(),image='C:\\Temp\\diagram.png';
@@ -173,6 +186,18 @@ test('approvals must match a live pending request and stay scoped to one action'
   assert.deepEqual(f.seen.at(-1).params,{conversationId:ID,requestId:'7',decision:'acceptForSession'});
   await f.client.act(ID,'reply',{requestId:'q',answers:{question:'my answer'}});
   assert.deepEqual(f.seen.at(-1).params.response,{answers:{question:{answers:['my answer']}}});
+});
+
+test('user-input answers preserve advertised choices and explicit other text',()=>{
+  const request={params:{questions:[{id:'target',options:[{label:'Core'},{label:'TUI'}],isOther:true},
+    {id:'details',options:[]}]}};
+  assert.deepEqual(normalizeUserInputResponse(request,{target:['TUI'],details:['include snapshots']}),{answers:{
+    target:{answers:['TUI']},details:{answers:['include snapshots']},
+  }});
+  assert.deepEqual(normalizeUserInputResponse(request,{target:['user_note: SDK wrapper'],details:'none'}).answers.target,
+    {answers:['user_note: SDK wrapper']});
+  assert.throws(()=>normalizeUserInputResponse(request,{target:['Unknown'],details:['none']}),/offered/);
+  assert.throws(()=>normalizeUserInputResponse(request,{target:[],details:['none']}),/every question/);
 });
 
 test('structured approvals must exactly match an app-advertised decision',()=>{

@@ -10,6 +10,7 @@ const {isDeepStrictEqual} = require('node:util');
 const {EventEmitter} = require('node:events');
 const MAX_FRAME = 128 * 1024 * 1024;
 const MAX_PROJECTED_MESSAGES = 600;
+const MAX_USER_INPUT_RESPONSE_BYTES = 64 * 1024;
 const VERSIONS = {'initialize':0, 'thread-owner-discovery':1,
   'thread-follower-load-complete-history':1, 'thread-follower-start-turn':2,
   'thread-follower-steer-turn':1, 'thread-follower-interrupt-turn':4,
@@ -123,11 +124,56 @@ function turnsOf(state) {
   if (Array.isArray(state.turns)) return state.turns;
   throw Error('Unsupported desktop history schema');
 }
+function questionReplyText(value) {
+  const source=String(value || '');
+  if (source.length>256*1024) return null;
+  const match=source.match(/^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*<\/send_user_message_question_reply>\s*$/i);
+  if (!match) return null;
+  try {
+    const replies=JSON.parse(match[1]);
+    if (!Array.isArray(replies) || !replies.length || replies.some(reply=>
+      !reply || typeof reply.question!=='string' || typeof reply.answer!=='string')) return null;
+    return ['Đã trả lời câu hỏi',...replies.flatMap((reply,index)=>[
+      '',`${replies.length>1 ? `${index+1}. ` : ''}Câu hỏi: ${reply.question.trim()}`,
+      '',`Trả lời: ${reply.answer.trim() || '(không có câu trả lời)'}`,
+    ])].join('\n').trim();
+  } catch (_error) { return null; }
+}
 function visibleUserText(value) {
-  return String(value || '')
+  const source=String(value || '');
+  const questionReply=questionReplyText(source);
+  if (questionReply!==null) return questionReply;
+  return source
     .replace(/(?:^|\n)\s*<in-app-browser-context\b[^>]*>[\s\S]*?<\/in-app-browser-context>\s*/gi,'\n')
     .replace(/^\s*## My request:\s*/i,'')
     .trim();
+}
+function normalizeUserInputResponse(request, suppliedAnswers) {
+  const answers={};
+  for (const question of request.params?.questions || []) {
+    if (typeof question.id!=='string' || !question.id) throw Error('Invalid user-input question');
+    const supplied=suppliedAnswers?.[question.id];
+    const values=(Array.isArray(supplied) ? supplied : [supplied]).map(value=>{
+      if (typeof value!=='string') throw Error('Answer every question');
+      return value.trim();
+    }).filter(Boolean);
+    if (!values.length || values.length>2) throw Error('Answer every question');
+    const options=Array.isArray(question.options) ? question.options : [];
+    if (options.length) {
+      const labels=options.map(option=>option?.label).filter(label=>typeof label==='string');
+      const allowOther=question.isOther ?? question.is_other ?? true;
+      const primaryIsOption=labels.includes(values[0]);
+      const primaryIsOther=allowOther && values[0].startsWith('user_note: ') && values[0].slice(11).trim();
+      if (!primaryIsOption && !primaryIsOther) throw Error('Choose one of the offered answers');
+      if (values.slice(1).some(value=>!value.startsWith('user_note: ') || !value.slice(11).trim()))
+        throw Error('Invalid answer note');
+    }
+    answers[question.id]={answers:values};
+  }
+  const response={answers};
+  if (Buffer.byteLength(JSON.stringify(response))>MAX_USER_INPUT_RESPONSE_BYTES)
+    throw Error('User-input response exceeds limit');
+  return response;
 }
 function textInput(input) {
   return visibleUserText((Array.isArray(input) ? input : [])
@@ -400,13 +446,8 @@ class DesktopClient extends EventEmitter {
           throw Error('Approval turn changed; refresh before replying.');
         method=approval[req.method];params.decision=validateApprovalDecision(req,data.decision);
       } else if (req.method==='item/tool/requestUserInput') {
-        const answers={};
-        for (const question of req.params.questions || []) {
-          const answer=data.answers?.[question.id];
-          if (typeof answer!=='string' || !answer.trim()) throw Error('Answer every question');
-          answers[question.id]={answers:[answer]};
-        }
-        method='thread-follower-submit-user-input';params.response={answers};
+        method='thread-follower-submit-user-input';
+        params.response=normalizeUserInputResponse(req,data.answers);
       } else throw Error('Answer this request in the desktop app.');
     } else throw Error('Unknown desktop action');
     await this.request(method,params,task.owner);
@@ -447,5 +488,5 @@ async function main() {
   lines.on('close',()=>{chain.finally(()=>{client.close();process.stdout.end();});});
 }
 module.exports={Decoder,frame,applyPatches,turnsOf,projectState,approvalDecisionKind,
-  validateApprovalDecision,DesktopClient,stageAttachment};
+  validateApprovalDecision,normalizeUserInputResponse,DesktopClient,stageAttachment};
 if (require.main===module) main().catch(()=>process.exit(1));

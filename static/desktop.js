@@ -76,7 +76,12 @@ function updateControls() {
   $("prompt").disabled=unavailable;
   $("reconnect").disabled=unavailable;
   $("logout").disabled=busy;
-  document.querySelectorAll("#requests button").forEach(b=>b.disabled=busy);
+  document.querySelectorAll("#requests button,#requests input,#requests textarea").forEach(control=>{
+    if(control.dataset.conditional) {
+      const selected=control.closest(".question-other")?.querySelector('input[type="radio"]')?.checked;
+      control.disabled=busy || !selected;
+    } else control.disabled=busy;
+  });
   document.querySelectorAll("#taskList button").forEach(b=>b.disabled=busy);
 }
 function setBusy(value) {busy=value;updateControls();}
@@ -268,15 +273,65 @@ function renderRequests(requests) {
       if(!actions.children.length)actions.append(textElement("p","Codex Desktop chưa cung cấp lựa chọn có thể gửi từ web.","muted"));
       box.append(actions);
     } else if(request.method==="item/tool/requestUserInput") {
-      const inputs={};
-      for(const question of request.params.questions || []) {
-        box.append(textElement("label",question.question || question.header || question.id));
-        if(question.options?.length) box.append(textElement("p",question.options.map(o=>o.label+": "+(o.description || "")).join("\n"),"muted small"));
-        const input=document.createElement("input");input.type=question.isSecret?"password":"text";
-        inputs[question.id]=input;box.append(input);
+      box.classList.add("question-request");
+      const controls=[];
+      for(const [index,question] of (request.params.questions || []).entries()) {
+        const fieldset=textElement("fieldset","","question-fieldset");
+        fieldset.append(textElement("legend",question.header || `Câu hỏi ${index+1}`,"question-header"),
+          textElement("p",question.question || question.id,"question-prompt"));
+        const options=Array.isArray(question.options) ? question.options : [];
+        if(options.length) {
+          const choices=textElement("div","","question-options"),name=`question-${request.id}-${index}`;
+          for(const option of options) {
+            const label=textElement("label","","question-option"),radio=document.createElement("input");
+            radio.type="radio";radio.name=name;radio.value=option.label || "";
+            const copy=textElement("span","","question-option-copy");
+            copy.append(textElement("strong",option.label || "Lựa chọn"));
+            if(option.description)copy.append(textElement("span",option.description,"muted small"));
+            label.append(radio,copy);choices.append(label);
+          }
+          const allowOther=question.isOther ?? question.is_other ?? true;
+          let otherRadio=null,otherInput=null;
+          if(allowOther) {
+            const label=textElement("label","","question-option question-other");
+            otherRadio=document.createElement("input");otherRadio.type="radio";otherRadio.name=name;otherRadio.value="__other__";
+            const copy=textElement("span","","question-option-copy");
+            copy.append(textElement("strong","Khác"),textElement("span","Nhập câu trả lời riêng.","muted small"));
+            otherInput=document.createElement(question.isSecret || question.is_secret ? "input" : "textarea");
+            if(otherInput.tagName==="INPUT")otherInput.type="password";else otherInput.rows=2;
+            otherInput.placeholder="Câu trả lời khác…";otherInput.disabled=true;otherInput.dataset.conditional="true";
+            otherRadio.onchange=()=>{otherInput.disabled=busy || !otherRadio.checked;if(!otherInput.disabled)otherInput.focus();};
+            otherInput.onfocus=()=>{otherRadio.checked=true;otherInput.disabled=busy;};
+            label.append(otherRadio,copy,otherInput);choices.append(label);
+          }
+          fieldset.append(choices);
+          controls.push({id:question.id,read:()=>{
+            const selected=fieldset.querySelector(`input[name="${CSS.escape(name)}"]:checked`);
+            if(!selected)throw new Error(`Chưa trả lời: ${question.header || question.question || question.id}`);
+            if(selected===otherRadio) {
+              const value=otherInput.value.trim();
+              if(!value)throw new Error(`Hãy nhập câu trả lời khác cho: ${question.header || question.id}`);
+              return [`user_note: ${value}`];
+            }
+            return [selected.value];
+          }});
+        } else {
+          const input=document.createElement(question.isSecret || question.is_secret ? "input" : "textarea");
+          if(input.tagName==="INPUT")input.type="password";else input.rows=2;
+          input.placeholder="Nhập câu trả lời…";fieldset.append(input);
+          controls.push({id:question.id,read:()=>{
+            const value=input.value.trim();
+            if(!value)throw new Error(`Chưa trả lời: ${question.header || question.question || question.id}`);
+            return [value];
+          }});
+        }
+        box.append(fieldset);
       }
-      const button=textElement("button","Gửi câu trả lời");
-      button.onclick=()=>reply(request,{answers:Object.fromEntries(Object.entries(inputs).map(([id,input])=>[id,input.value]))});
+      const button=textElement("button","Gửi câu trả lời");button.className="question-submit";
+      button.onclick=()=>{
+        try {reply(request,{answers:Object.fromEntries(controls.map(control=>[control.id,control.read()]))});}
+        catch(error){notice(error.message);}
+      };
       box.append(button);
     } else {
       box.append(textElement("p","Loại yêu cầu này cần trả lời trong app Windows.","muted"));

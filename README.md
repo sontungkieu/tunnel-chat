@@ -146,7 +146,9 @@ values remain metadata and are never resolved as Linux paths.
   only the exact choices advertised by Codex Desktop: one-time approval,
   session-scoped approval, command/network policy amendments, decline or cancel
   when each choice is available. A decision is accepted only while the same
-  request is still pending; user-input questions can also be answered on the page.
+  request is still pending. User-input questions render their advertised choices,
+  descriptions and an optional free-form **Khác** answer; submitted question replies
+  are shown as readable question/answer text instead of the app's internal envelope.
 - **Kết nối lại** rediscovers the owner and requests a fresh snapshot. After a
   server restart, select a linked task to reconnect. Initial loads and reconnects
   run as background jobs so the HTTPS request does not time out. The page reports

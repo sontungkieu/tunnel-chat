@@ -49,7 +49,12 @@ def loss(theta):
     "requests":[{"id":"test-approval","method":"item/commandExecution/requestApproval",
                  "params":{"command":"echo preview","cwd":r"D:\dev\demo","reason":"Kiểm thử phê duyệt từ xa",
                            "turnId":"demo-turn",
-                           "availableDecisions":["accept","acceptForSession","decline","cancel"]}}],
+                           "availableDecisions":["accept","acceptForSession","decline","cancel"]}},
+                {"id":"test-question","method":"item/tool/requestUserInput",
+                 "params":{"questions":[{"id":"scope","header":"Phạm vi",
+                   "question":"Bạn muốn áp dụng thay đổi ở đâu?","isOther":True,"isSecret":False,
+                   "options":[{"label":"Chỉ task này (Recommended)","description":"Giữ thay đổi trong phạm vi hiện tại."},
+                              {"label":"Toàn project","description":"Áp dụng cho mọi task trong project."}]}]}}],
     "historyTruncated":False}
 
 def fake_call(config,action,task=None,data=None,refresh=False,progress=None,timeout=None):
