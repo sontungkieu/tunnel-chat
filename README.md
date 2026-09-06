@@ -164,6 +164,9 @@ values remain metadata and are never resolved as Linux paths.
 - The Codex page supports persistent light and dark themes. Its live activity
   panel can be collapsed, and completed tool calls are collapsed by default
   while running or failed calls stay open for inspection.
+- On phones, the project/task sidebar becomes an accessible slide-out drawer;
+  chat, pending approvals and the composer stay inside the dynamic viewport with
+  touch-sized controls and safe-area padding.
 - A Codex mode selector switches explicitly between ChatGPT app tasks on
   Windows (`/codex`) and independent Codex CLI sessions in WSL (`/codex/cli`).
 - Connected Desktop tasks are grouped by project in the sidebar; project groups

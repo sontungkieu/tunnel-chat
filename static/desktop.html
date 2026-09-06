@@ -17,12 +17,16 @@
   <script defer src="/static/shared.js"></script><script defer src="/static/desktop.js"></script>
 </head>
 <body>
-  <aside>
+  <div id="sidebarBackdrop" class="sidebar-backdrop" aria-hidden="true"></div>
+  <aside id="sidebar" aria-label="Điều hướng và danh sách task">
     <div class="brand-row">
       <div class="brand-mark" aria-hidden="true">T</div>
       <div class="brand-copy"><h1>Tunnel Chat</h1><p class="muted">Codex Desktop từ xa</p></div>
       <button type="button" id="themeToggle" class="icon-button" aria-label="Đổi giao diện sáng tối">
         <span id="themeIcon" aria-hidden="true">☾</span>
+      </button>
+      <button type="button" id="sidebarClose" class="icon-button sidebar-close" aria-label="Đóng danh sách task">
+        <span aria-hidden="true">×</span>
       </button>
     </div>
     <section class="sidebar-section">
@@ -52,6 +56,10 @@
   </aside>
   <main>
     <header>
+      <button type="button" id="sidebarToggle" class="icon-button mobile-menu-button"
+        aria-controls="sidebar" aria-expanded="false" aria-label="Mở danh sách task">
+        <span aria-hidden="true">☰</span>
+      </button>
       <div class="task-heading"><span class="eyebrow">Task hiện tại</span><h2 id="title">Chọn một task</h2><div id="meta" class="muted"></div></div>
       <div class="header-actions">
         <details id="activityPanel" class="activity-panel" open>

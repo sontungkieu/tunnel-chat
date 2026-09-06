@@ -38,6 +38,25 @@ function applyTheme(theme) {
 applyTheme(document.documentElement.dataset.theme || "dark");
 $("themeToggle").onclick=()=>applyTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
 $("codexMode").onchange=event=>location.assign(event.target.value);
+const mobileLayout=matchMedia("(max-width: 760px), (max-height: 520px) and (max-width: 960px)");
+function setSidebar(open) {
+  const wasOpen=document.body.classList.contains("sidebar-open");
+  const compact=mobileLayout.matches,sidebar=$("sidebar");
+  document.body.classList.toggle("sidebar-open",open);
+  $("sidebarToggle").setAttribute("aria-expanded",String(open));
+  document.querySelector("main").inert=open && compact;
+  sidebar.inert=compact && !open;
+  if(compact && !open)sidebar.setAttribute("aria-hidden","true");else sidebar.removeAttribute("aria-hidden");
+  if(open)$("sidebarClose").focus();
+  else if(wasOpen && compact)$("sidebarToggle").focus();
+}
+$("sidebarToggle").onclick=()=>setSidebar(!document.body.classList.contains("sidebar-open"));
+$("sidebarClose").onclick=()=>setSidebar(false);
+$("sidebarBackdrop").onclick=()=>setSidebar(false);
+document.addEventListener("keydown",event=>{if(event.key==="Escape")setSidebar(false);});
+mobileLayout.addEventListener?.("change",event=>{if(!event.matches)setSidebar(false);});
+setSidebar(false);
+if(mobileLayout.matches)$("activityPanel").open=false;
 function operationId() {
   // crypto.randomUUID is unavailable on an ordinary HTTP tunnel/LAN origin.
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -286,6 +305,7 @@ async function list() {
       button.disabled=busy;button.title=chat.title;
       button.onclick=async()=>{
         if(busy) return;
+        setSidebar(false);
         setBusy(true);notice();
         active=Number(chat.id);sessionStorage.setItem("desktopActiveChat",String(active));
         snapshot=null;messageKey="";requestKey="";$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
@@ -322,7 +342,7 @@ $("linkForm").onsubmit=async event=>{
     const data=await loadTask({thread:$("thread").value});
     active=data.chat_id;sessionStorage.setItem("desktopActiveChat",String(active));
     messageKey="";requestKey="";renderState(data.state);
-    $("files").value="";$("filesLabel").textContent="";await list();
+    $("files").value="";$("filesLabel").textContent="";await list();setSidebar(false);
   }catch(e){notice(e.message);}finally{setBusy(false);}
 };
 $("linkButton").onclick=()=>$("linkForm").requestSubmit();
