@@ -172,7 +172,11 @@ values remain metadata and are never resolved as Linux paths.
 - A Codex mode selector switches explicitly between ChatGPT app tasks on
   Windows (`/codex`) and independent Codex CLI sessions in WSL (`/codex/cli`).
 - Connected Desktop tasks are grouped by project in the sidebar; project groups
-  can be collapsed and keep their state for the current browser session.
+  can be collapsed and keep their state for the current browser session. The bridge
+  follows lightweight status snapshots without loading every task's full history:
+  running tasks spin, tasks waiting for you use an amber dot, and completed tasks
+  retain a glowing unread dot until opened in that browser. The full mobile drawer
+  scrolls vertically, including long project/task lists and the logout control.
 - Desktop messages render local, sanitized Markdown with tables, lists, links,
   fenced code and copy controls. KaTeX renders inline/display TeX, AMS-style
   environments, matrices, cases, equation tags and accessible MathML without a CDN.

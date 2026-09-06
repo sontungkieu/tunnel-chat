@@ -71,6 +71,20 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(first["chat_id"],second["chat_id"])
         self.assertEqual(server.get_codex_chat(first["chat_id"])["repo_path"],r"D:\dev\work")
 
+    def test_list_merges_cached_live_summaries_without_loading_history(self):
+        chat=self.chat();row=server.get_codex_chat(chat);turn=str(uuid.uuid4())
+        summary={row["codex_session_id"]:{"status":"running","activity":"thinking",
+            "revision":17,"latestTurnId":turn}}
+        with mock.patch.object(server,"load_config",return_value={"desktop_enabled":"1"}), \
+             mock.patch.object(desktop.BRIDGE,"call",return_value=summary) as call:
+            result=desktop.dispatch(server,"list",{})
+        self.assertEqual(result["chats"][0]["activity"],"thinking")
+        self.assertEqual(result["chats"][0]["latestTurnId"],turn)
+        self.assertTrue(result["chats"][0]["live"])
+        self.assertEqual(server.get_codex_chat(chat)["status"],"running")
+        call.assert_called_once_with({"desktop_enabled":"1"},"summaries",
+            data={"threadIds":[row["codex_session_id"]]},timeout=5)
+
     def test_background_load_reports_progress_and_result(self):
         task=str(uuid.uuid4())
         def fake_link(_server,value,progress=None):

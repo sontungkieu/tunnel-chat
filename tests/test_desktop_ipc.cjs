@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict');
 const net=require('node:net');
 const {test}=require('node:test');
-const {Decoder,frame,applyPatches,projectState,validateApprovalDecision,normalizeUserInputResponse,DesktopClient}=require('../desktop_ipc.cjs');
+const {Decoder,frame,applyPatches,projectState,taskSummary,validateApprovalDecision,normalizeUserInputResponse,DesktopClient}=require('../desktop_ipc.cjs');
 const ID='11111111-1111-4111-8111-111111111111';
 const sample=()=>({id:ID,title:'test',cwd:'D:\\work',latestModel:'test-model',threadRuntimeStatus:{type:'idle'},
   turns:[{turnId:'turn-1',status:'completed',params:{input:[{type:'text',text:'hello'}]},
@@ -50,6 +50,7 @@ test('projected user messages remove app context and canonical duplicates',()=>{
   assert.deepEqual(users,[{id:'u',role:'user',text:'hello',images:[image]}]);
   assert.equal(view.project,'research_vdt');
   assert.equal(view.projectPath,'D:\\dev\\codex\\research_vdt');
+  assert.equal(view.latestTurnId,'turn-1');
 });
 test('question replies are projected as readable text without internal envelopes',()=>{
   const s=sample();
@@ -143,6 +144,20 @@ test('follower sends to owner and inherits settings without overriding runtime',
     context:{inheritThreadSettings:true}});
   assert.equal(sent.hostId,undefined);
 });
+test('sidebar summaries follow tasks without loading full history',async t=>{
+  const f=await fixture(t);
+  assert.deepEqual(f.client.summaries([ID,'invalid']),{});
+  let summaries={};
+  for(let attempt=0;attempt<20 && !summaries[ID];attempt++) {
+    await new Promise(resolve=>setTimeout(resolve,10));summaries=f.client.summaries([ID]);
+  }
+  assert.deepEqual(summaries[ID],{threadId:ID,status:'idle',activity:'completed',
+    activeTurnId:null,latestTurnId:'turn-1',revision:1});
+  assert.equal(f.seen.filter(message=>message.method==='thread-follower-load-complete-history').length,0);
+  await f.client.state(ID);
+  assert.equal(f.seen.filter(message=>message.method==='thread-follower-load-complete-history').length,1);
+});
+
 test('cancel carries exact active turn; stale stop and implicit steering are rejected',async t=>{
   const f=await fixture(t),s=sample();s.threadRuntimeStatus={type:'active'};s.turns[0].status='inProgress';f.setState(s);
   await f.client.state(ID);

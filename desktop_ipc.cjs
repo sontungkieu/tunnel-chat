@@ -221,6 +221,17 @@ function activityOf(state, latestTurn, activeTurn) {
     return latestItem.phase==='final' ? 'finalizing' : 'working';
   return 'working';
 }
+function taskSummaryFromTurns(state, turns, revision) {
+  const latest=turns.at(-1);
+  const active=latest?.status==='inProgress' ? latest : null;
+  const activity=activityOf(state,latest,active);
+  return {threadId:state.id,status:(active || activity==='waiting')?'running':'idle',activity,
+    activeTurnId:active?.turnId || null,latestTurnId:latest?.turnId || null,revision};
+}
+function taskSummary(state, revision) {
+  if (!state || typeof state.id !== 'string') throw Error('Unsupported desktop state');
+  return taskSummaryFromTurns(state,turnsOf(state),revision);
+}
 function projectState(state, revision) {
   if (!state || typeof state.id !== 'string') throw Error('Unsupported desktop state');
   const turns = turnsOf(state);
@@ -249,16 +260,12 @@ function projectState(state, revision) {
         addMessage({id:item.id,role:'tool',text:'File changes',status:item.status});
     }
   }
-  const latest=turns.at(-1);
-  const active=latest?.status==='inProgress' ? latest : null;
-  const activity=activityOf(state,latest,active);
-  const running=!!active || activity==='waiting';
+  const latest=turns.at(-1),summary=taskSummaryFromTurns(state,turns,revision);
   const project=projectOf(state,latest);
   return {threadId:state.id,title:state.title || state.generatedTitle || state.id,
     cwd:state.cwd || '',backend:'desktop',hostId:'local',
     project:project.project,projectPath:project.projectPath,
-    model:state.latestModel || '',status:running?'running':'idle',activity,
-    activeTurnId:active?.turnId || null,revision,
+    model:state.latestModel || '',...summary,
     messages,
     requests:(state.requests || []).map(r=>({id:r.id,method:r.method,params:r.params})),
     historyTruncated:messageCount>MAX_PROJECTED_MESSAGES};
@@ -268,7 +275,8 @@ class DesktopClient extends EventEmitter {
     historyTimeout=180000,snapshotTimeout=30000}={}) {
     super(); this.socketFactory=socketFactory; this.timeout=timeout;
     this.historyTimeout=historyTimeout;this.snapshotTimeout=snapshotTimeout;
-    this.pending=new Map(); this.tasks=new Map(); this.connecting=null; this.socket=null; this.clientId=null;
+    this.pending=new Map(); this.tasks=new Map(); this.tracking=new Map();
+    this.connecting=null; this.socket=null; this.clientId=null;
   }
   async connect() {
     if (this.clientId) return;
@@ -299,7 +307,7 @@ class DesktopClient extends EventEmitter {
     for (const {reject,timer} of this.pending.values()) {clearTimeout(timer);reject(error);}
     this.pending.clear();
     for (const task of this.tasks.values()) {task.error=error.message;task.state=null;}
-    this.tasks.clear();
+    this.tasks.clear();this.tracking.clear();
     this.emit('change');
   }
   send(message) {
@@ -358,19 +366,45 @@ class DesktopClient extends EventEmitter {
     } catch(e) {task.state=null;task.error=e.message;}
     this.emit('change',p.conversationId);
   }
+  track(id) {
+    if (this.tasks.has(id)) return Promise.resolve();
+    if (this.tracking.has(id)) return this.tracking.get(id);
+    const tracking=(async()=>{
+      await this.connect();
+      if (this.tasks.has(id)) return;
+      const discovery=await this.request('thread-owner-discovery',{hostId:'local',conversationId:id});
+      const owner=discovery.handledByClientId;
+      if (!owner || discovery.result?.supportsUntrustedAppInput!==true) return;
+      this.tasks.set(id,{owner,state:null,revision:0,error:null,historyLoaded:false});
+      this.following(id,owner);
+    })().catch(()=>{}).finally(()=>this.tracking.delete(id));
+    this.tracking.set(id,tracking);return tracking;
+  }
+  summaries(ids) {
+    const requested=(Array.isArray(ids) ? ids : []).filter(id=>
+      typeof id==='string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)).slice(0,64);
+    for (const id of requested) void this.track(id);
+    const summaries={};
+    for (const id of requested) {
+      const task=this.tasks.get(id);
+      if (task?.state) summaries[id]=taskSummary(task.state,task.revision);
+    }
+    return summaries;
+  }
   async watch(id, refresh=false, onProgress=()=>{}) {
     if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) throw Error('Invalid task ID');
     onProgress({stage:'connecting'});
     await this.connect();
+    if (this.tracking.has(id)) await this.tracking.get(id);
     let task=this.tasks.get(id);
-    if (task?.state && !refresh) {onProgress({stage:'cached'});return task;}
+    if (task?.state && task.historyLoaded && !refresh) {onProgress({stage:'cached'});return task;}
     if (task) this.following(id,task.owner,false);
     onProgress({stage:'discovering'});
     const discovery=await this.request('thread-owner-discovery',{hostId:'local',conversationId:id});
     const owner=discovery.handledByClientId;
     if (!owner || discovery.result?.supportsUntrustedAppInput!==true)
       throw Error('Desktop task owner does not support this client. Open the task in the Windows app.');
-    task={owner,state:null,revision:0,error:null};this.tasks.set(id,task);
+    task={owner,state:null,revision:0,error:null,historyLoaded:false};this.tasks.set(id,task);
     this.following(id,owner);
     let lastProgress=0;
     const frameProgress=progress=>{
@@ -384,6 +418,7 @@ class DesktopClient extends EventEmitter {
     try {
       onProgress({stage:'loading-history'});
       await this.request('thread-follower-load-complete-history',{conversationId:id},owner,this.historyTimeout);
+      task.historyLoaded=true;
       if (!task.state) {
         onProgress({stage:'waiting-snapshot'});
         await new Promise((resolve,reject)=>{
@@ -478,6 +513,7 @@ async function main() {
         if (line.length>16*1024*1024) throw Error('Bridge command too large');
         command=JSON.parse(line);let result;
         if (command.action==='stage') result=stageAttachment(command.data);
+        else if (command.action==='summaries') result=client.summaries(command.data?.threadIds);
         else if (command.action==='state') result=await client.state(command.threadId,!!command.refresh,
           progress=>process.stdout.write(JSON.stringify({id:command.id,progress})+'\n'));
         else result=await client.act(command.threadId,command.action,command.data || {});
@@ -487,6 +523,6 @@ async function main() {
   });
   lines.on('close',()=>{chain.finally(()=>{client.close();process.stdout.end();});});
 }
-module.exports={Decoder,frame,applyPatches,turnsOf,projectState,approvalDecisionKind,
+module.exports={Decoder,frame,applyPatches,turnsOf,projectState,taskSummary,approvalDecisionKind,
   validateApprovalDecision,normalizeUserInputResponse,DesktopClient,stageAttachment};
 if (require.main===module) main().catch(()=>process.exit(1));

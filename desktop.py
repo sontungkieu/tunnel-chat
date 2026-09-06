@@ -237,9 +237,10 @@ def state(server, chat_id, refresh=False, progress=None):
     prepare_state_images(server, chat_id, result)
     # Native paths are metadata here; never resolve a Windows cwd as a Linux path.
     with server.connect() as conn:
-        conn.execute("""UPDATE codex_chats SET title=?,repo_path=?,status=?,updated_at=?
+        conn.execute("""UPDATE codex_chats SET title=?,repo_path=?,status=?,activity=?,updated_at=?
                       WHERE id=? AND backend='desktop'""",
-                     (result["title"], result["cwd"], result["status"], server.now_iso(), chat_id))
+                     (result["title"], result["cwd"], result["status"], result.get("activity"),
+                      server.now_iso(), chat_id))
         conn.commit()
     return result
 
@@ -399,14 +400,42 @@ def mutate(server, chat_id, action, data):
     return result
 
 
+def list_chats(server):
+    with server.connect() as conn:
+        chats=[dict(row) for row in conn.execute(
+            "SELECT * FROM codex_chats WHERE backend='desktop' ORDER BY updated_at DESC")]
+    live={}
+    if chats:
+        try:
+            live=BRIDGE.call(server.load_config(),"summaries",data={
+                "threadIds":[chat["codex_session_id"] for chat in chats]},timeout=5)
+        except ValueError:
+            live={}
+    updates=[]
+    for chat in chats:
+        summary=live.get(chat["codex_session_id"]) if isinstance(live,dict) else None
+        if not isinstance(summary,dict):
+            chat["live"]=False
+            continue
+        status=summary.get("status") if summary.get("status") in {"running","idle"} else chat["status"]
+        activity=summary.get("activity") if isinstance(summary.get("activity"),str) else chat.get("activity")
+        chat.update(status=status,activity=activity,live=True)
+        if isinstance(summary.get("revision"),int): chat["revision"]=summary["revision"]
+        if isinstance(summary.get("latestTurnId"),str): chat["latestTurnId"]=summary["latestTurnId"]
+        updates.append((status,activity,chat["id"]))
+    if updates:
+        with server.connect() as conn:
+            conn.executemany("""UPDATE codex_chats SET status=?,activity=?
+                              WHERE id=? AND backend='desktop'""",updates)
+            conn.commit()
+    return chats
+
+
 def dispatch(server, action, data):
     if server.load_config().get("desktop_enabled") != "1":
         raise ValueError("Desktop backend is disabled. Set DESKTOP_ENABLED=1 in .env.local")
     if action == "list":
-        with server.connect() as conn:
-            chats=[dict(row) for row in conn.execute(
-                "SELECT * FROM codex_chats WHERE backend='desktop' ORDER BY updated_at DESC")]
-        return {"chats":chats,"transport":json.loads(server.client_transport_config())}
+        return {"chats":list_chats(server),"transport":json.loads(server.client_transport_config())}
     if action == "load/start":
         return start_load(server, data)
     if action == "load/status":

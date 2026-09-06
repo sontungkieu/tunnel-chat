@@ -6,9 +6,13 @@ const rpc = RLCSDTransport.createRpc({apiBase:"/d",token,retryLimit:1});
 const uploads = RLCSDTransport.createRpc({apiBase:"/c",token,retryLimit:1});
 let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
 let snapshot = null, busy = false, polling = false, requestKey = "", messageKey = "";
-let messageImageUrls = [], imageRenderRevision = 0;
-let collapsedProjects = new Set();
+let messageImageUrls = [], imageRenderRevision = 0, sidebarSyncAt = 0;
+let collapsedProjects = new Set(), taskReadState = {};
 try {collapsedProjects=new Set(JSON.parse(sessionStorage.getItem("desktopCollapsedProjects") || "[]"));} catch(_error) {}
+try {
+  const saved=JSON.parse(localStorage.getItem("desktopTaskReadState") || "{}");
+  if(saved && !Array.isArray(saved) && typeof saved==="object")taskReadState=saved;
+} catch(_error) {}
 let transport = {chunkBytes:6144,concurrency:3,retryLimit:4};
 const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết nối Codex Desktop",
   cached:"Đang dùng snapshot đã tải",discovering:"Đang tìm tiến trình sở hữu task",
@@ -154,6 +158,47 @@ async function loadMessageImage(element,caption,image,chatId,revision) {
     if(revision===imageRenderRevision && caption.isConnected)caption.textContent=`${image.name || "Ảnh"} · không tải được`;
   }
 }
+const liveRunningActivities=new Set(["thinking","tool","working","finalizing"]);
+function completionMarker(chat) {
+  if(chat.activity!=="completed" || !chat.latestTurnId)return "";
+  let hash=2166136261;
+  for(const character of String(chat.latestTurnId))hash=Math.imul(hash^character.charCodeAt(0),16777619);
+  return (hash>>>0).toString(16);
+}
+function persistTaskReadState() {
+  try {localStorage.setItem("desktopTaskReadState",JSON.stringify(taskReadState));} catch(_error) {}
+}
+function taskVisualState(chat,markRead=false) {
+  const id=String(chat.id),marker=completionMarker(chat);
+  let record=taskReadState[id],changed=false;
+  if(!record || Array.isArray(record) || typeof record!=="object") {
+    record={knownCompletion:"",readCompletion:""};taskReadState[id]=record;changed=true;
+  }
+  if(marker && record.knownCompletion!==marker){record.knownCompletion=marker;changed=true;}
+  if(markRead && marker && record.readCompletion!==marker){record.readCompletion=marker;changed=true;}
+  if(changed)persistTaskReadState();
+  const live=chat.live===true;
+  if(live && liveRunningActivities.has(chat.activity))return "running";
+  if(live && chat.activity==="waiting")return "waiting";
+  if(marker && record.readCompletion!==marker)return "unread";
+  if(live && ["failed","interrupted"].includes(chat.activity))return "failed";
+  return "idle";
+}
+const taskStateLabels={running:"Đang chạy",waiting:"Đang chờ bạn",unread:"Đã hoàn tất, chưa đọc",failed:"Đã dừng hoặc gặp lỗi"};
+function updateTaskIndicator(chat,markRead=false,targetButton=null) {
+  const button=targetButton || Array.from(document.querySelectorAll("#taskList button[data-chat-id]")).find(
+    candidate=>candidate.dataset.chatId===String(chat.id));
+  if(!button)return;
+  const state=taskVisualState(chat,markRead),indicator=button.querySelector(".task-indicator");
+  button.dataset.taskState=state;indicator.className=`task-indicator ${state}`;
+  indicator.hidden=state==="idle";
+  const label=taskStateLabels[state] || "";
+  button.title=label ? `${chat.title} · ${label}` : chat.title;
+  button.setAttribute("aria-label",label ? `${chat.title}, ${label}` : chat.title);
+}
+function applyTaskStatuses(chats) {
+  for(const chat of chats || [])updateTaskIndicator(chat,false);
+}
 function updateActivity(activity,label) {
   const panel=$("activityPanel"),next=activity || "idle";
   panel.dataset.activity=next;
@@ -180,6 +225,7 @@ function renderState(state) {
   $("meta").textContent=[project?`Project: ${project}`:"Project: chưa xác định",state.model,state.cwd,"Desktop · local"].filter(Boolean).join(" · ");
   updateActivity(state.activity || state.status,
     activityLabels[state.activity] || (state.status==="running"?"Agent đang làm việc":"Sẵn sàng"));
+  updateTaskIndicator({id:active,live:true,...state},true);
   updateControls();
   const next=JSON.stringify(state.messages);
   if(next!==messageKey) {
@@ -356,8 +402,10 @@ async function list() {
     summary.append(textElement("span",group.name,"project-name"),textElement("span",group.chats.length,"project-count"));
     const tasks=textElement("div","","project-tasks");
     for(const chat of group.chats) {
-      const button=textElement("button",chat.title,Number(chat.id)===active?"active":"");
-      button.disabled=busy;button.title=chat.title;
+      const button=textElement("button","",Number(chat.id)===active?"active":"");
+      button.dataset.chatId=String(chat.id);button.disabled=busy;button.title=chat.title;
+      const taskTitle=textElement("span",chat.title,"task-title"),indicator=textElement("span","","task-indicator");
+      indicator.hidden=true;indicator.setAttribute("aria-hidden","true");button.append(taskTitle,indicator);
       button.onclick=async()=>{
         if(busy) return;
         setSidebar(false);
@@ -369,7 +417,7 @@ async function list() {
         catch(e) {notice(e.message);}
         finally {setBusy(false);}
       };
-      tasks.append(button);
+      tasks.append(button);updateTaskIndicator(chat,false,button);
     }
     details.append(summary,tasks);
     details.ontoggle=()=>{details.open?collapsedProjects.delete(group.key):collapsedProjects.add(group.key);rememberProjectGroups();};
@@ -377,6 +425,17 @@ async function list() {
   }
   if(!data.chats.length) $("taskList").append(textElement("p","Chưa có task được kết nối.","muted"));
   if(active && !data.chats.some(c=>Number(c.id)===active)) active=0;
+  const liveIds=new Set(data.chats.map(chat=>String(chat.id)));
+  let pruned=false;
+  for(const id of Object.keys(taskReadState))if(!liveIds.has(id)){delete taskReadState[id];pruned=true;}
+  if(pruned)persistTaskReadState();
+  sidebarSyncAt=Date.now();
+}
+async function syncSidebarStatuses() {
+  if(Date.now()-sidebarSyncAt<3000)return;
+  sidebarSyncAt=Date.now();
+  try {const data=await rpc("list");applyTaskStatuses(data.chats);}
+  catch(_error) {}
 }
 async function refresh(force=false) {
   if(!active || polling) return;
@@ -387,6 +446,7 @@ async function refresh(force=false) {
       ? (await loadTask({chat_id:selected,refresh:force})).state
       : await rpc("state",{chat_id:selected,refresh:false});
     if(selected===active)renderState(state);
+    await syncSidebarStatuses();
   }
   catch(e) {snapshot=null;updateControls();updateActivity("failed","Mất kết nối");notice(e.message);}
   finally {polling=false;}
