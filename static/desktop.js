@@ -7,7 +7,7 @@ const uploads = RLCSDTransport.createRpc({apiBase:"/c",token,retryLimit:1});
 let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
 let snapshot = null, busy = false, polling = false, requestKey = "", messageKey = "";
 let messageImageUrls = [], imageRenderRevision = 0, sidebarSyncAt = 0;
-let collapsedProjects = new Set(), taskReadState = {}, newProjectDraft = null;
+let collapsedProjects = new Set(), taskReadState = {}, newProjectDraft = null, taskMenuContext = null;
 try {collapsedProjects=new Set(JSON.parse(sessionStorage.getItem("desktopCollapsedProjects") || "[]"));} catch(_error) {}
 try {
   const saved=JSON.parse(localStorage.getItem("desktopTaskReadState") || "{}");
@@ -461,6 +461,96 @@ function renderRequests(requests) {
     $("requests").append(box);
   }
 }
+function taskDeepLink(chat) {
+  return `codex://threads/${chat.codex_session_id}`;
+}
+async function copyText(value,label) {
+  try {
+    if(!navigator.clipboard?.writeText)throw new Error("clipboard unavailable");
+    await navigator.clipboard.writeText(value);
+  } catch(_error) {
+    const input=document.createElement("textarea");input.value=value;input.readOnly=true;
+    input.style.position="fixed";input.style.opacity="0";document.body.append(input);
+    input.select();const copied=document.execCommand("copy");input.remove();
+    if(!copied)throw new Error("Trình duyệt không cho phép sao chép.");
+  }
+  notice(`Đã sao chép ${label}.`);
+}
+function closeTaskMenu({restoreFocus=false}={}) {
+  const menu=$("taskContextMenu"),trigger=taskMenuContext?.trigger;
+  menu.hidden=true;if(trigger)trigger.setAttribute("aria-expanded","false");taskMenuContext=null;
+  if(restoreFocus && trigger?.isConnected)trigger.focus();
+}
+function openTaskMenu(event,chat,group,trigger) {
+  if(busy)return;
+  event?.preventDefault();event?.stopPropagation();closeTaskMenu();
+  const menu=$("taskContextMenu"),rect=trigger.getBoundingClientRect();
+  taskMenuContext={chat,group,trigger};trigger.setAttribute("aria-expanded","true");menu.hidden=false;
+  menu.style.left="0px";menu.style.top="0px";
+  const box=menu.getBoundingClientRect();
+  const requestedX=Number.isFinite(event?.clientX) && event.clientX>0 ? event.clientX : rect.right;
+  const requestedY=Number.isFinite(event?.clientY) && event.clientY>0 ? event.clientY : rect.bottom;
+  menu.style.left=`${Math.max(8,Math.min(requestedX,innerWidth-box.width-8))}px`;
+  menu.style.top=`${Math.max(8,Math.min(requestedY,innerHeight-box.height-8))}px`;
+  menu.querySelector("button")?.focus();
+}
+function clearSelectedTask() {
+  active=0;snapshot=null;newProjectDraft=null;messageKey="";requestKey="";
+  sessionStorage.removeItem("desktopActiveChat");releaseMessageImages();
+  $("title").textContent="Chọn một task";$("meta").textContent="";
+  updateActivity("idle","Chưa kết nối");
+  $("activityDetail").textContent="Kết nối một task để theo dõi hoạt động.";
+  $("messages").replaceChildren(textElement("p","Chọn một task ở sidebar hoặc kết nối bằng deeplink.","empty"));
+  $("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
+  updateControls();
+}
+async function selectChat(chat,force=false) {
+  if(busy)return;
+  closeTaskMenu();setSidebar(false);setBusy(true);notice();
+  active=Number(chat.id);newProjectDraft=null;sessionStorage.setItem("desktopActiveChat",String(active));
+  snapshot=null;messageKey="";requestKey="";$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
+  updateControls();
+  try {await list();await refresh(force);}
+  catch(e) {notice(e.message);}
+  finally {setBusy(false);}
+}
+$("taskContextMenu").onclick=async event=>{
+  const item=event.target.closest("button[data-action]"),context=taskMenuContext;
+  if(!item || !context || busy)return;
+  const {chat,group}=context,action=item.dataset.action;closeTaskMenu();
+  try {
+    if(action==="open"){location.assign(taskDeepLink(chat));return;}
+    if(action==="copy-link"){await copyText(taskDeepLink(chat),"deeplink");return;}
+    if(action==="copy-id"){await copyText(chat.codex_session_id,"task ID");return;}
+    if(action==="new"){startProjectTask(group);return;}
+    if(action==="reconnect"){await selectChat(chat,true);return;}
+    if(action==="unlink"){
+      if(!confirm(`Gỡ “${chat.title}” khỏi danh sách Tunnel Chat? Task vẫn được giữ nguyên trong Codex Desktop.`))return;
+      setBusy(true);await rpc("unlink",{chat_id:chat.id});
+      if(Number(chat.id)===active)clearSelectedTask();
+      await list();notice("Đã gỡ liên kết. Bạn có thể dán lại deeplink bất cứ lúc nào.");
+    }
+  } catch(error){notice(error.message);}
+  finally {if(busy)setBusy(false);}
+};
+$("taskContextMenu").onkeydown=event=>{
+  const items=Array.from($("taskContextMenu").querySelectorAll("button:not(:disabled)"));
+  const index=items.indexOf(document.activeElement);
+  let next=null;
+  if(event.key==="ArrowDown")next=items[(index+1+items.length)%items.length];
+  else if(event.key==="ArrowUp")next=items[(index-1+items.length)%items.length];
+  else if(event.key==="Home")next=items[0];
+  else if(event.key==="End")next=items.at(-1);
+  if(next){event.preventDefault();next.focus();}
+};
+document.addEventListener("pointerdown",event=>{
+  if(taskMenuContext && !$("taskContextMenu").contains(event.target))closeTaskMenu();
+});
+document.addEventListener("keydown",event=>{
+  if(event.key==="Escape" && taskMenuContext){event.preventDefault();closeTaskMenu({restoreFocus:true});}
+});
+window.addEventListener("resize",()=>closeTaskMenu());
+document.addEventListener("scroll",()=>closeTaskMenu(),true);
 async function list() {
   const data=await rpc("list");transport=data.transport;
   $("taskList").replaceChildren();
@@ -481,22 +571,22 @@ async function list() {
     summary.append(textElement("span",group.name,"project-name"),textElement("span",group.chats.length,"project-count"));
     const tasks=textElement("div","","project-tasks");
     for(const chat of group.chats) {
+      const row=textElement("div","","task-row");
       const button=textElement("button","",Number(chat.id)===active?"active":"");
       button.dataset.chatId=String(chat.id);button.disabled=busy;button.title=chat.title;
+      button.setAttribute("aria-haspopup","menu");button.setAttribute("aria-expanded","false");
       const taskTitle=textElement("span",chat.title,"task-title"),indicator=textElement("span","","task-indicator");
       indicator.hidden=true;indicator.setAttribute("aria-hidden","true");button.append(taskTitle,indicator);
-      button.onclick=async()=>{
-        if(busy) return;
-        setSidebar(false);
-        setBusy(true);notice();
-        active=Number(chat.id);newProjectDraft=null;sessionStorage.setItem("desktopActiveChat",String(active));
-        snapshot=null;messageKey="";requestKey="";$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
-        updateControls();
-        try {await list();await refresh();}
-        catch(e) {notice(e.message);}
-        finally {setBusy(false);}
+      button.onclick=()=>selectChat(chat);
+      button.oncontextmenu=event=>openTaskMenu(event,chat,group,button);
+      button.onkeydown=event=>{
+        if(event.key==="ContextMenu" || (event.shiftKey && event.key==="F10"))openTaskMenu(event,chat,group,button);
       };
-      tasks.append(button);updateTaskIndicator(chat,false,button);
+      const more=textElement("button","⋯","task-more");more.type="button";
+      more.title=`Thao tác với ${chat.title}`;more.setAttribute("aria-label",more.title);
+      more.setAttribute("aria-haspopup","menu");more.setAttribute("aria-expanded","false");
+      more.onclick=event=>openTaskMenu(event,chat,group,more);
+      row.append(button,more);tasks.append(row);updateTaskIndicator(chat,false,button);
     }
     details.append(summary,add,tasks);
     details.ontoggle=()=>{details.open?collapsedProjects.delete(group.key):collapsedProjects.add(group.key);rememberProjectGroups();};

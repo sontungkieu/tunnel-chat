@@ -47,8 +47,8 @@ class DesktopTests(unittest.TestCase):
         conn.execute("INSERT INTO codex_chats VALUES (1,'old-session','old chat')")
         desktop.init_schema(conn)
         desktop.init_schema(conn)
-        self.assertEqual(conn.execute("SELECT codex_session_id,backend,host_id FROM codex_chats").fetchone(),
-                         ("old-session","cli-wsl","local"))
+        self.assertEqual(conn.execute("SELECT codex_session_id,backend,host_id,hidden FROM codex_chats").fetchone(),
+                         ("old-session","cli-wsl","local",0))
         conn.close()
 
     def test_desktop_never_runs_legacy_cli_or_process_cleanup(self):
@@ -70,6 +70,19 @@ class DesktopTests(unittest.TestCase):
             second=desktop.link(server,task)
         self.assertEqual(first["chat_id"],second["chat_id"])
         self.assertEqual(server.get_codex_chat(first["chat_id"])["repo_path"],r"D:\dev\work")
+
+    def test_unlink_hides_web_record_and_relink_restores_same_task(self):
+        task=str(uuid.uuid4());chat=self.chat()
+        with server.connect() as conn:
+            conn.execute("UPDATE codex_chats SET codex_session_id=? WHERE id=?",(task,chat));conn.commit()
+        self.assertEqual(desktop.unlink(server,chat),{"ok":True})
+        self.assertEqual(desktop.list_chats(server),[])
+        snapshot={"threadId":task,"title":"restored","cwd":r"D:\work","status":"idle","messages":[]}
+        with mock.patch.object(desktop.BRIDGE,"call",return_value=snapshot):
+            linked=desktop.link(server,task)
+        self.assertEqual(linked["chat_id"],chat)
+        with server.connect() as conn:
+            self.assertEqual(conn.execute("SELECT hidden FROM codex_chats WHERE id=?",(chat,)).fetchone()[0],0)
 
     def test_list_merges_cached_live_summaries_without_loading_history(self):
         chat=self.chat();row=server.get_codex_chat(chat);turn=str(uuid.uuid4())
@@ -275,6 +288,7 @@ class DesktopTests(unittest.TestCase):
                 self.assertEqual(get(path)[0],200)
             self.assertIn(b'href="/chat/"', get("/codex")[1])
             self.assertIn(b'type="button" id="linkButton"', get("/codex")[1])
+            self.assertIn(b'id="taskContextMenu"', get("/codex")[1])
             self.assertEqual(get("/static/desktop.js")[0],200)
             self.assertEqual(get("/static/rich-text.js")[0],200)
             self.assertEqual(get("/static/vendor/katex-0.18.5.min.css")[0],200)

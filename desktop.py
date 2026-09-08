@@ -216,6 +216,8 @@ def init_schema(conn):
         conn.execute("ALTER TABLE codex_chats ADD COLUMN backend TEXT NOT NULL DEFAULT 'cli-wsl'")
     if "host_id" not in columns:
         conn.execute("ALTER TABLE codex_chats ADD COLUMN host_id TEXT NOT NULL DEFAULT 'local'")
+    if "hidden" not in columns:
+        conn.execute("ALTER TABLE codex_chats ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
     conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS desktop_task_owner
                  ON codex_chats(host_id, codex_session_id) WHERE backend = 'desktop'""")
     conn.execute("""CREATE TABLE IF NOT EXISTS desktop_actions (
@@ -259,6 +261,8 @@ def link(server, value, progress=None):
             (server.now_iso(),server.now_iso(),result["title"],result["cwd"],task,result["status"]))
         chat_id = conn.execute("""SELECT id FROM codex_chats
             WHERE backend='desktop' AND host_id='local' AND codex_session_id=?""",(task,)).fetchone()[0]
+        conn.execute("UPDATE codex_chats SET hidden=0,updated_at=? WHERE id=?",
+                     (server.now_iso(),chat_id))
         conn.commit()
     prepare_state_images(server, chat_id, result)
     return {"chat_id":chat_id,"state":result}
@@ -547,10 +551,20 @@ def create_status(data):
             raise ValueError("Creation request expired or was not found")
         return create_view(job)
 
+
+def unlink(server, chat_id: int) -> dict:
+    require_chat(server,chat_id)
+    with server.connect() as conn:
+        conn.execute("UPDATE codex_chats SET hidden=1,updated_at=? WHERE id=? AND backend='desktop'",
+                     (server.now_iso(),chat_id))
+        conn.commit()
+    return {"ok":True}
+
+
 def list_chats(server):
     with server.connect() as conn:
         chats=[dict(row) for row in conn.execute(
-            "SELECT * FROM codex_chats WHERE backend='desktop' ORDER BY updated_at DESC")]
+            "SELECT * FROM codex_chats WHERE backend='desktop' AND hidden=0 ORDER BY updated_at DESC")]
     live={}
     if chats:
         try:
@@ -595,6 +609,8 @@ def dispatch(server, action, data):
     require_chat(server,chat_id)
     if action == "state":
         return state(server,chat_id,bool(data.get("refresh")))
+    if action == "unlink":
+        return unlink(server,chat_id)
     if action in {"send","cancel","reply"}:
         return mutate(server,chat_id,action,data)
     if action == "prompt/finish":

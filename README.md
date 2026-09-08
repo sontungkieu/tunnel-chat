@@ -185,6 +185,11 @@ values remain metadata and are never resolved as Linux paths.
   touch-sized controls and safe-area padding.
 - A Codex mode selector switches explicitly between ChatGPT app tasks on
   Windows (`/codex`) and independent Codex CLI sessions in WSL (`/codex/cli`).
+- Right-click a task, press its **⋯** button, or use **Shift+F10** to open the
+  task menu. It can open the native `codex://threads/...` deeplink, copy the
+  deeplink or task ID, create another task in the same project, reconnect, or hide
+  the task from Tunnel Chat. Hiding leaves the native Desktop task intact, and
+  linking its deeplink again restores the same web record.
 - Connected Desktop tasks are grouped by project in the sidebar; project groups
   can be collapsed and keep their state for the current browser session. The bridge
   follows lightweight status snapshots without loading every task's full history:

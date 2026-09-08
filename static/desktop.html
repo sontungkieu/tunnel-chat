@@ -93,5 +93,15 @@
       </div>
     </form>
   </main>
+  <div id="taskContextMenu" class="task-context-menu" role="menu" aria-label="Thao tác với task" hidden>
+    <button type="button" role="menuitem" data-action="open">Mở trong Codex Desktop</button>
+    <button type="button" role="menuitem" data-action="copy-link">Sao chép deeplink</button>
+    <button type="button" role="menuitem" data-action="copy-id">Sao chép task ID</button>
+    <hr>
+    <button type="button" role="menuitem" data-action="new">Task mới trong project</button>
+    <button type="button" role="menuitem" data-action="reconnect">Kết nối lại</button>
+    <hr>
+    <button type="button" role="menuitem" data-action="unlink" class="danger-text">Gỡ khỏi Tunnel Chat</button>
+  </div>
 </body>
 </html>
