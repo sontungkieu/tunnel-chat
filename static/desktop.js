@@ -8,6 +8,7 @@ let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
 let snapshot = null, busy = false, polling = false, requestKey = "", messageKey = "";
 let messageImageUrls = [], imageRenderRevision = 0, sidebarSyncAt = 0;
 let collapsedProjects = new Set(), taskReadState = {}, newProjectDraft = null, taskMenuContext = null;
+let pendingQuote = null, selectionCandidate = null, selectionTimer = 0;
 try {collapsedProjects=new Set(JSON.parse(sessionStorage.getItem("desktopCollapsedProjects") || "[]"));} catch(_error) {}
 try {
   const saved=JSON.parse(localStorage.getItem("desktopTaskReadState") || "{}");
@@ -157,7 +158,7 @@ async function waitForCreate(createId) {
   }
 }
 function renderCreateDraft() {
-  snapshot=null;messageKey="";requestKey="";releaseMessageImages();
+  snapshot=null;messageKey="";requestKey="";releaseMessageImages();clearPendingQuote();hideSelectionAction();
   $("title").textContent="Task mới";
   $("meta").textContent=`Project: ${newProjectDraft.name} · ${newProjectDraft.path} · Desktop · local`;
   updateActivity("idle","Soạn yêu cầu đầu tiên");
@@ -209,6 +210,62 @@ function richTextElement(source) {
   } catch(_error) {content.textContent=String(source || "");content.classList.add("rich-text-fallback");}
   return content;
 }
+function hideSelectionAction() {
+  clearTimeout(selectionTimer);selectionTimer=0;selectionCandidate=null;
+  const button=$("selectionAction");button.hidden=true;button.style.left="";button.style.top="";
+}
+function clearPendingQuote() {
+  pendingQuote=null;
+  $("quoteContext").hidden=true;$("quoteText").textContent="";
+}
+function setPendingQuote(text) {
+  const normalized=window.TunnelSelectionQuote?.normalize(text) || String(text || "").trim();
+  if(!normalized)return;
+  pendingQuote={chatId:active,text:normalized};
+  $("quoteText").textContent=normalized;$("quoteContext").hidden=false;
+}
+function selectionParent(node) {
+  return node?.nodeType===Node.ELEMENT_NODE ? node : node?.parentElement;
+}
+function selectedAssistantQuote() {
+  const selection=window.getSelection();
+  if(!selection || selection.isCollapsed || !selection.rangeCount || !active || newProjectDraft)return null;
+  const range=selection.getRangeAt(0),start=selectionParent(range.startContainer),end=selectionParent(range.endContainer);
+  const card=start?.closest?.(".message.assistant"),content=start?.closest?.(".rich-text");
+  if(!card || !content || !card.contains(end))return null;
+  const raw=selection.toString(),text=window.TunnelSelectionQuote?.normalize(raw) || raw.trim();
+  if(!text)return null;
+  const rect=range.getBoundingClientRect();
+  if(!rect || (!rect.width && !rect.height))return null;
+  return {chatId:active,text,rect};
+}
+function showSelectionAction() {
+  const candidate=selectedAssistantQuote();
+  if(!candidate){hideSelectionAction();return;}
+  selectionCandidate=candidate;
+  const button=$("selectionAction");button.hidden=false;
+  const box=button.getBoundingClientRect(),gap=10;
+  let left=candidate.rect.left+(candidate.rect.width-box.width)/2;
+  let top=candidate.rect.top-box.height-gap;
+  if(top<8)top=candidate.rect.bottom+gap;
+  left=Math.max(8,Math.min(left,innerWidth-box.width-8));
+  top=Math.max(8,Math.min(top,innerHeight-box.height-8));
+  button.style.left=`${left}px`;button.style.top=`${top}px`;
+}
+function scheduleSelectionAction() {
+  clearTimeout(selectionTimer);selectionTimer=setTimeout(showSelectionAction,100);
+}
+$("messages").addEventListener("pointerup",scheduleSelectionAction);
+$("messages").addEventListener("keyup",scheduleSelectionAction);
+$("messages").addEventListener("scroll",hideSelectionAction,{passive:true});
+document.addEventListener("selectionchange",scheduleSelectionAction);
+$("selectionAction").onpointerdown=event=>event.preventDefault();
+$("selectionAction").onclick=()=>{
+  if(!selectionCandidate || selectionCandidate.chatId!==active){hideSelectionAction();return;}
+  setPendingQuote(selectionCandidate.text);hideSelectionAction();
+  window.getSelection()?.removeAllRanges();$("prompt").focus();
+};
+$("quoteRemove").onclick=()=>{clearPendingQuote();$("prompt").focus();};
 function projectForChat(chat) {
   const path=String(chat.repo_path || "").replace(/[\\/]+$/,"");
   return {key:path.toLocaleLowerCase() || "__unknown__",
@@ -305,6 +362,7 @@ function renderState(state) {
   updateControls();
   const next=JSON.stringify(state.messages);
   if(next!==messageKey) {
+    hideSelectionAction();
     releaseMessageImages();
     const revision=++imageRenderRevision,chatId=active;
     const nearBottom=$("messages").scrollHeight-$("messages").scrollTop-$("messages").clientHeight<100;
@@ -496,7 +554,7 @@ function openTaskMenu(event,chat,group,trigger) {
 }
 function clearSelectedTask() {
   active=0;snapshot=null;newProjectDraft=null;messageKey="";requestKey="";
-  sessionStorage.removeItem("desktopActiveChat");releaseMessageImages();
+  sessionStorage.removeItem("desktopActiveChat");releaseMessageImages();clearPendingQuote();hideSelectionAction();
   $("title").textContent="Chọn một task";$("meta").textContent="";
   updateActivity("idle","Chưa kết nối");
   $("activityDetail").textContent="Kết nối một task để theo dõi hoạt động.";
@@ -506,7 +564,7 @@ function clearSelectedTask() {
 }
 async function selectChat(chat,force=false) {
   if(busy)return;
-  closeTaskMenu();setSidebar(false);setBusy(true);notice();
+  closeTaskMenu();setSidebar(false);clearPendingQuote();hideSelectionAction();setBusy(true);notice();
   active=Number(chat.id);newProjectDraft=null;sessionStorage.setItem("desktopActiveChat",String(active));
   snapshot=null;messageKey="";requestKey="";$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
   updateControls();
@@ -550,7 +608,8 @@ document.addEventListener("keydown",event=>{
   if(event.key==="Escape" && taskMenuContext){event.preventDefault();closeTaskMenu({restoreFocus:true});}
 });
 window.addEventListener("resize",()=>closeTaskMenu());
-document.addEventListener("scroll",()=>closeTaskMenu(),true);
+window.addEventListener("resize",hideSelectionAction);
+document.addEventListener("scroll",()=>{closeTaskMenu();hideSelectionAction();},true);
 async function list() {
   const data=await rpc("list");transport=data.transport;
   $("taskList").replaceChildren();
@@ -624,6 +683,7 @@ $("linkForm").onsubmit=async event=>{
   event.preventDefault();setBusy(true);notice();
   try {
     const data=await loadTask({thread:$("thread").value});
+    clearPendingQuote();hideSelectionAction();
     active=data.chat_id;newProjectDraft=null;sessionStorage.setItem("desktopActiveChat",String(active));
     messageKey="";requestKey="";renderState(data.state);
     $("files").value="";$("filesLabel").textContent="";await list();setSidebar(false);
@@ -645,8 +705,10 @@ $("composer").onsubmit=async event=>{
   if(busy || (!snapshot && !newProjectDraft)) return;
   const draft=newProjectDraft,chatId=draft?.sourceChatId || active;
   const mode=draft ? "start" : $("mode").value,expectedTurnId=draft ? null : snapshot.activeTurnId;
-  const text=$("prompt").value.trim(), files=Array.from($("files").files);
-  if(!text && !files.length) return;
+  const body=$("prompt").value.trim(), files=Array.from($("files").files);
+  if(!body && !files.length) return;
+  const text=!draft && pendingQuote?.chatId===chatId
+    ? (window.TunnelSelectionQuote?.buildPrompt(pendingQuote.text,body) || body) : body;
   if(draft && files.length){notice("Hãy tạo task trước, rồi đính kèm file ở lượt tiếp theo.");return;}
   if(!draft && snapshot.status==="running" && mode!=="steer"){notice("Task đang chạy. Chọn gửi chỉ dẫn hoặc chờ lượt này kết thúc.");return;}
   if(!draft && mode==="steer" && !expectedTurnId){notice("Không có lượt đang chạy để gửi chỉ dẫn.");return;}
@@ -679,7 +741,7 @@ $("composer").onsubmit=async event=>{
       newProjectDraft=null;active=created.chat_id;sessionStorage.setItem("desktopActiveChat",String(active));
       messageKey="";requestKey="";renderState(created.state);await list();
     } else await refresh();
-    $("prompt").value="";$("files").value="";$("filesLabel").textContent="";
+    $("prompt").value="";$("files").value="";$("filesLabel").textContent="";clearPendingQuote();
   } catch(e) {
     notice(e.message+(submissionStarted?"\nNếu kết quả gửi chưa rõ, hãy kiểm tra hội thoại trước khi gửi lại.":""));
   } finally {setBusy(false);}

@@ -14,6 +14,7 @@
   <script defer src="/static/vendor/markdown-it-texmath-1.0.0.js"></script>
   <script defer src="/static/vendor/katex-copy-tex-0.18.5.min.js"></script>
   <script defer src="/static/rich-text.js"></script>
+  <script defer src="/static/selection-quote.js"></script>
   <script defer src="/static/shared.js"></script><script defer src="/static/desktop.js"></script>
 </head>
 <body>
@@ -76,6 +77,10 @@
     <section id="requests" aria-label="Yêu cầu chờ trả lời"></section>
     <form id="composer">
       <div class="composer-shell">
+        <div id="quoteContext" class="quote-context" hidden>
+          <div class="quote-copy"><span>Đoạn trích từ Codex</span><blockquote id="quoteText"></blockquote></div>
+          <button type="button" id="quoteRemove" class="quote-remove" aria-label="Bỏ đoạn trích">×</button>
+        </div>
         <label for="prompt" class="sr-only">Tin nhắn</label>
         <textarea id="prompt" rows="3" placeholder="Gửi tin nhắn tới task… Ctrl+Enter để gửi"></textarea>
         <div id="filesLabel" class="muted small"></div>
@@ -103,5 +108,6 @@
     <hr>
     <button type="button" role="menuitem" data-action="unlink" class="danger-text">Gỡ khỏi Tunnel Chat</button>
   </div>
+  <button type="button" id="selectionAction" class="selection-action" hidden>Add to chat</button>
 </body>
 </html>

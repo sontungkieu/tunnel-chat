@@ -199,6 +199,10 @@ values remain metadata and are never resolved as Linux paths.
 - Desktop messages render local, sanitized Markdown with tables, lists, links,
   fenced code and copy controls. KaTeX renders inline/display TeX, AMS-style
   environments, matrices, cases, equation tags and accessible MathML without a CDN.
+- Select text inside a Codex response to reveal **Add to chat**. The selected
+  excerpt appears above the composer, can be removed before sending, and is sent
+  as bounded quoted context through the same resumable prompt transport. The
+  selection action and quote preview are touch-friendly on phones.
 - Mutation operation IDs are persisted. Completed operations are deduplicated;
   pending/uncertain operations are never replayed. After a timeout, inspect the
   task before sending again. Prompt uploads are consumed before dispatch, so

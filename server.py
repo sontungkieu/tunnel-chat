@@ -3359,7 +3359,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         raw_path = parsed.path
         path = normalize_api_path(raw_path)
-        if path in {"/static/shared.js", "/static/desktop.js", "/static/rich-text.js", "/static/desktop.css"}:
+        if path in {"/static/shared.js", "/static/desktop.js", "/static/rich-text.js", "/static/selection-quote.js", "/static/desktop.css"}:
             static_path = BASE_DIR / "static" / Path(path).name
             data = static_path.read_bytes()
             self.send_response(HTTPStatus.OK)
