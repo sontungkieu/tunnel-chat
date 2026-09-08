@@ -55,6 +55,11 @@ class ServerTestCase(unittest.TestCase):
         self.assertNotIn("2025.2-IT3180E-SE", env_path.read_text(encoding="utf-8"))
         self.assertEqual(env_path.stat().st_mode & 0o777, 0o600)
 
+    def test_default_upload_chunk_is_safe_for_restrictive_get_proxies(self) -> None:
+        with mock.patch.object(server, "ENV_PATH", Path(self.temp_dir.name) / "missing.env"), \
+             mock.patch.dict(server.os.environ, {}, clear=True):
+            self.assertEqual(server.upload_chunk_bytes(), 2048)
+
     def test_queue_upload_reports_missing_chunks_and_finishes(self) -> None:
         chunk_size = server.upload_chunk_bytes()
         data = (b"traceback line\n" * 700)[: chunk_size + 321]

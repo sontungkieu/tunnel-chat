@@ -16,6 +16,27 @@ async function main() {
   assert.equal(new URL(requested.url,"http://local").searchParams.has("token"),false);
   assert.equal(requested.options.headers["x-chat-token"],"test-credential");
   assert.equal(requested.options.cache,"no-store");
+
+  const proxyRequests = [], proxyChunks = new Set(), proxyChunkCount = Math.ceil(13556/2048);
+  global.fetch = async (url, options) => {
+    proxyRequests.push(url);
+    if (url.length >= 4096) return {ok:false,status:414,statusText:"URI Too Long",text:async()=>"proxy rejected URL"};
+    const parsed = new URL(url,"http://local"), path = parsed.pathname;
+    const payload=JSON.parse(Buffer.from(parsed.searchParams.get("p"),"base64url").toString("utf8"));
+    let result = {ok:true};
+    if (path.endsWith("/start")) result = {upload_id:11};
+    else if (path.endsWith("/status")) result = {
+      received:[...proxyChunks],missing:Array.from({length:proxyChunkCount},(_,index)=>index).filter(index=>!proxyChunks.has(index))};
+    else if (path.endsWith("/chunk")) {proxyChunks.add(payload.chunk_index);result={ok:true};}
+    return {ok:true,json:async()=>result};
+  };
+  const proxyRpc=RLCSDTransport.createRpc({apiBase:"/c",token:"test-credential"});
+  await RLCSDTransport.uploadBlob({rpc:proxyRpc,
+    paths:{start:"prompt/start",chunk:"prompt/chunk",status:"prompt/status",finish:"prompt/finish"},
+    blob:new Blob([new Uint8Array(13556)]),chunkBytes:2048,concurrency:3,retryLimit:1});
+  assert.equal(proxyChunks.size,proxyChunkCount);
+  assert.ok(Math.max(...proxyRequests.map(url=>url.length))<4096);
+
   const local = new Map([["fixChatToken","old"]]), session = new Map();
   global.localStorage={getItem:key=>local.get(key),removeItem:key=>local.delete(key)};
   global.sessionStorage={getItem:key=>session.get(key),setItem:(key,value)=>session.set(key,value)};

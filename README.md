@@ -229,15 +229,17 @@ up to 4 MB. Uploads validate byte sizes and chunk counts, retry missing chunks
 with bounded concurrency, and expire incomplete uploads after six hours.
 
 ```bash
-UPLOAD_CHUNK_BYTES=6144
+UPLOAD_CHUNK_BYTES=2048
 UPLOAD_CONCURRENCY=3
 UPLOAD_RETRY_LIMIT=4
 UPLOAD_TTL_SECONDS=21600
 ```
 
 Chunk size is clamped to 1024–32768 bytes, concurrency to 1–6, retries to 1–8,
-and TTL to five minutes–seven days. The legacy pages use authenticated fetch-based
-SSE with polling fallback for buffering proxies.
+and TTL to five minutes–seven days. The 2048-byte default keeps the complete
+double-base64 GET-RPC URL below 4 KB for restrictive company proxies; raise it
+only when every proxy in the path accepts longer URLs. The legacy pages use
+authenticated fetch-based SSE with polling fallback for buffering proxies.
 
 In the manual queue, paste an error and press **Send & Fix**. Operator commands:
 
