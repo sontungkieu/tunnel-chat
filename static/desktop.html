@@ -71,9 +71,24 @@
       </div>
     </header>
     <div id="notice" role="alert" hidden></div>
-    <section id="messages" aria-label="Hội thoại">
-      <p class="empty">Dán link task ở bên trái để tiếp tục làm việc từ trình duyệt.</p>
-    </section>
+    <div class="conversation-region">
+      <section id="messages" aria-label="Hội thoại">
+        <p class="empty">Dán link task ở bên trái để tiếp tục làm việc từ trình duyệt.</p>
+      </section>
+      <div id="chatLoader" class="chat-loader" role="status" aria-live="polite" aria-atomic="true" hidden>
+        <div class="chat-loader-card">
+          <span class="chat-loader-spinner" aria-hidden="true"></span>
+          <div class="chat-loader-copy">
+            <strong id="chatLoaderStage">Đang tải hội thoại</strong>
+            <span id="chatLoaderMeta">Đang chuẩn bị…</span>
+          </div>
+          <div id="chatLoaderProgress" class="chat-loader-progress" role="progressbar"
+            aria-label="Tiến độ tải hội thoại" aria-valuemin="0" aria-valuemax="100">
+            <span id="chatLoaderBar"></span>
+          </div>
+        </div>
+      </div>
+    </div>
     <section id="requests" aria-label="Yêu cầu chờ trả lời"></section>
     <form id="composer">
       <div class="composer-shell">

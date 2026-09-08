@@ -6,7 +6,7 @@ const rpc = RLCSDTransport.createRpc({apiBase:"/d",token,retryLimit:1});
 const uploads = RLCSDTransport.createRpc({apiBase:"/c",token,retryLimit:1});
 let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
 let snapshot = null, busy = false, polling = false, requestKey = "", messageKey = "";
-let messageImageUrls = [], imageRenderRevision = 0, sidebarSyncAt = 0;
+let messageImageUrls = [], imageRenderRevision = 0, pendingMediaRevision = 0, sidebarSyncAt = 0;
 let collapsedProjects = new Set(), taskReadState = {}, newProjectDraft = null, taskMenuContext = null;
 let pendingQuote = null, selectionCandidate = null, selectionTimer = 0;
 try {collapsedProjects=new Set(JSON.parse(sessionStorage.getItem("desktopCollapsedProjects") || "[]"));} catch(_error) {}
@@ -30,7 +30,7 @@ const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết 
   cached:"Đang dùng snapshot đã tải",discovering:"Đang tìm tiến trình sở hữu task",
   "loading-history":"Đang yêu cầu toàn bộ lịch sử",
   "receiving-history":"Đang nhận snapshot lịch sử", "waiting-snapshot":"Đang chờ snapshot",
-  projecting:"Đang dựng giao diện",complete:"Đã tải xong"};
+  projecting:"Đang dựng giao diện","loading-media":"Đang tải tệp trong hội thoại",complete:"Đã tải xong"};
 const createStages={queued:"Đang xếp yêu cầu tạo task",
   "bootstrapping-controller":"Đang chuẩn bị bộ tạo task cho project",
   "controller-ready":"Đã chuẩn bị bộ tạo task",connecting:"Đang kết nối Codex Desktop",
@@ -89,6 +89,29 @@ function operationId() {
   return h.slice(0,8)+"-"+h.slice(8,12)+"-"+h.slice(12,16)+"-"+h.slice(16,20)+"-"+h.slice(20);
 }
 function notice(text="") {$("notice").textContent=text;$("notice").hidden=!text;}
+function formatLoaderBytes(progress) {
+  const received=Number(progress?.receivedBytes),total=Number(progress?.totalBytes);
+  if(!Number.isFinite(received) || !Number.isFinite(total) || total<=0)return "";
+  const unit=total>=1048576?"MiB":"KiB",scale=unit==="MiB"?1048576:1024;
+  const digits=total/scale>=10?0:1;
+  return `${(received/scale).toFixed(digits)}/${(total/scale).toFixed(digits)} ${unit}`;
+}
+function setChatLoading(visible,{stage="queued",progress={},elapsed=0,detail="",label=""}={}) {
+  const loader=$("chatLoader"),bar=$("chatLoaderBar"),track=$("chatLoaderProgress");
+  loader.hidden=!visible;$("messages").setAttribute("aria-busy",String(visible));
+  if(!visible){track.removeAttribute("aria-valuenow");track.dataset.indeterminate="true";bar.style.width="";return;}
+  $("chatLoaderStage").textContent=label || loadStages[stage] || createStages[stage] || "Đang tải hội thoại";
+  const percent=Number(progress?.percent),parts=[];
+  if(Number.isFinite(percent))parts.push(`${Math.max(0,Math.min(100,Math.round(percent)))}%`);
+  const bytes=formatLoaderBytes(progress);if(bytes)parts.push(bytes);
+  if(detail)parts.push(detail);
+  if(Number.isFinite(elapsed) && elapsed>0)parts.push(`${Math.floor(elapsed)} giây`);
+  $("chatLoaderMeta").textContent=parts.join(" · ") || "Đang chuẩn bị…";
+  const determinate=Number.isFinite(percent);
+  track.dataset.indeterminate=String(!determinate);
+  if(determinate){const value=Math.max(0,Math.min(100,percent));track.setAttribute("aria-valuenow",String(Math.round(value)));bar.style.width=`${value}%`;}
+  else {track.removeAttribute("aria-valuenow");bar.style.width="";}
+}
 function selectOption(value,label=value) {
   const option=document.createElement("option");option.value=value;option.textContent=label;return option;
 }
@@ -136,29 +159,36 @@ function updateControls() {
 }
 function setBusy(value) {busy=value;updateControls();}
 async function loadTask(payload) {
-  const started=await rpc("load/start",payload,{attempts:1});
-  while(true) {
-    const job=await rpc("load/status",{load_id:started.load_id},{attempts:4});
-    if(job.status==="complete") {notice();return job.result;}
-    if(job.status==="error") throw new Error(job.error || "Không tải được task");
-    const progress=job.progress || {};
-    const bytes=progress.totalBytes ? ` · ${Math.round(progress.receivedBytes/1048576)}/${Math.round(progress.totalBytes/1048576)} MiB` : "";
-    const percent=Number.isFinite(progress.percent) ? ` · ${progress.percent}%` : "";
-    notice(`${loadStages[job.stage] || "Đang tải task"}${percent}${bytes} · ${Math.floor(job.elapsed_seconds)} giây`);
-    await wait(750);
-  }
+  setChatLoading(true,{stage:"queued"});
+  try {
+    const started=await rpc("load/start",payload,{attempts:1});
+    while(true) {
+      const job=await rpc("load/status",{load_id:started.load_id},{attempts:4});
+      if(job.status==="complete") {notice();return job.result;}
+      if(job.status==="error") throw new Error(job.error || "Không tải được task");
+      const progress=job.progress || {},label=loadStages[job.stage] || "Đang tải task";
+      const bytes=formatLoaderBytes(progress),percent=Number.isFinite(progress.percent) ? ` · ${progress.percent}%` : "";
+      notice(`${label}${percent}${bytes?` · ${bytes}`:""} · ${Math.floor(job.elapsed_seconds)} giây`);
+      setChatLoading(true,{stage:job.stage,progress,elapsed:job.elapsed_seconds,label});
+      await wait(750);
+    }
+  } catch(error) {setChatLoading(false);throw error;}
 }
 async function waitForCreate(createId) {
-  while(true) {
-    const job=await rpc("create/status",{create_id:createId},{attempts:4});
-    if(job.status==="complete") {notice();return job.result;}
-    if(job.status==="error") throw new Error(job.error || "Không tạo được task");
-    notice(`${createStages[job.stage] || "Đang tạo task mới"} · ${Math.floor(job.elapsed_seconds)} giây`);
-    await wait(750);
-  }
+  setChatLoading(true,{stage:"queued",label:createStages.queued});
+  try {
+    while(true) {
+      const job=await rpc("create/status",{create_id:createId},{attempts:4});
+      if(job.status==="complete") {notice();return job.result;}
+      if(job.status==="error") throw new Error(job.error || "Không tạo được task");
+      notice(`${createStages[job.stage] || "Đang tạo task mới"} · ${Math.floor(job.elapsed_seconds)} giây`);
+      setChatLoading(true,{stage:job.stage,elapsed:job.elapsed_seconds,label:createStages[job.stage] || "Đang tạo task mới"});
+      await wait(750);
+    }
+  } catch(error) {setChatLoading(false);throw error;}
 }
 function renderCreateDraft() {
-  snapshot=null;messageKey="";requestKey="";releaseMessageImages();clearPendingQuote();hideSelectionAction();
+  snapshot=null;messageKey="";requestKey="";pendingMediaRevision=0;imageRenderRevision+=1;setChatLoading(false);releaseMessageImages();clearPendingQuote();hideSelectionAction();
   $("title").textContent="Task mới";
   $("meta").textContent=`Project: ${newProjectDraft.name} · ${newProjectDraft.path} · Desktop · local`;
   updateActivity("idle","Soạn yêu cầu đầu tiên");
@@ -366,7 +396,7 @@ function renderState(state) {
     releaseMessageImages();
     const revision=++imageRenderRevision,chatId=active;
     const nearBottom=$("messages").scrollHeight-$("messages").scrollTop-$("messages").clientHeight<100;
-    const fragment=document.createDocumentFragment();
+    const fragment=document.createDocumentFragment(),imageLoads=[];
     for(const message of state.messages) {
       if(message.role==="tool") {fragment.append(toolCard(message));continue;}
       const card=textElement("article","","message "+message.role);
@@ -379,7 +409,7 @@ function renderState(state) {
           element.className="message-image";element.loading="lazy";element.alt=image.name || "Ảnh đính kèm";
           const caption=textElement("figcaption",image.name || "Ảnh đính kèm");
           figure.append(element,caption);gallery.append(figure);
-          void loadMessageImage(element,caption,image,chatId,revision);
+          imageLoads.push(loadMessageImage(element,caption,image,chatId,revision));
         }
         card.append(gallery);
       }
@@ -389,7 +419,18 @@ function renderState(state) {
     $("messages").replaceChildren(fragment);
     if(nearBottom || !messageKey) $("messages").scrollTop=$("messages").scrollHeight;
     messageKey=next;
-  }
+    if(imageLoads.length) {
+      pendingMediaRevision=revision;
+      let loaded=0;const total=imageLoads.length;
+      setChatLoading(true,{stage:"loading-media",progress:{percent:0},detail:`0/${total} tệp`});
+      for(const imageLoad of imageLoads)void imageLoad.finally(()=>{
+        if(revision!==imageRenderRevision || pendingMediaRevision!==revision)return;
+        loaded+=1;
+        if(loaded>=total){pendingMediaRevision=0;setChatLoading(false);return;}
+        setChatLoading(true,{stage:"loading-media",progress:{percent:loaded/total*100},detail:`${loaded}/${total} tệp`});
+      });
+    } else {pendingMediaRevision=0;setChatLoading(false);}
+  } else if(!pendingMediaRevision)setChatLoading(false);
   const requests=JSON.stringify(state.requests);
   if(requests!==requestKey) {renderRequests(state.requests);requestKey=requests;}
 }
@@ -554,6 +595,7 @@ function openTaskMenu(event,chat,group,trigger) {
 }
 function clearSelectedTask() {
   active=0;snapshot=null;newProjectDraft=null;messageKey="";requestKey="";
+  pendingMediaRevision=0;imageRenderRevision+=1;setChatLoading(false);
   sessionStorage.removeItem("desktopActiveChat");releaseMessageImages();clearPendingQuote();hideSelectionAction();
   $("title").textContent="Chọn một task";$("meta").textContent="";
   updateActivity("idle","Chưa kết nối");
@@ -564,7 +606,8 @@ function clearSelectedTask() {
 }
 async function selectChat(chat,force=false) {
   if(busy)return;
-  closeTaskMenu();setSidebar(false);clearPendingQuote();hideSelectionAction();setBusy(true);notice();
+  closeTaskMenu();setSidebar(false);pendingMediaRevision=0;imageRenderRevision+=1;setChatLoading(false);
+  clearPendingQuote();hideSelectionAction();setBusy(true);notice();
   active=Number(chat.id);newProjectDraft=null;sessionStorage.setItem("desktopActiveChat",String(active));
   snapshot=null;messageKey="";requestKey="";$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
   updateControls();
@@ -680,7 +723,7 @@ async function refresh(force=false) {
   finally {polling=false;}
 }
 $("linkForm").onsubmit=async event=>{
-  event.preventDefault();setBusy(true);notice();
+  event.preventDefault();pendingMediaRevision=0;imageRenderRevision+=1;setChatLoading(false);setBusy(true);notice();
   try {
     const data=await loadTask({thread:$("thread").value});
     clearPendingQuote();hideSelectionAction();

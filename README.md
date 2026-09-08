@@ -167,7 +167,9 @@ values remain metadata and are never resolved as Linux paths.
   server restart, select a linked task to reconnect. Initial loads and reconnects
   run as background jobs so the HTTPS request does not time out. The page reports
   the current IPC stage, elapsed seconds, and received bytes/percentage while a
-  large snapshot frame is arriving.
+  large snapshot frame is arriving. A loader inside the chat pane keeps those
+  details visible and remains until the projected history and its images finish
+  loading; image batches report completed file count and percentage.
 - The selected task reports its latest turn state separately: thinking, running a
   tool, waiting for user input, finalizing, completed, interrupted, or failed.
   A connected desktop runtime by itself is not treated as an active assistant turn.

@@ -291,6 +291,8 @@ class DesktopTests(unittest.TestCase):
             self.assertIn(b'id="taskContextMenu"', get("/codex")[1])
             self.assertIn(b'id="selectionAction"', get("/codex")[1])
             self.assertIn(b'id="quoteContext"', get("/codex")[1])
+            self.assertIn(b'id="chatLoader"', get("/codex")[1])
+            self.assertIn(b'id="chatLoaderProgress"', get("/codex")[1])
             self.assertEqual(get("/static/desktop.js")[0],200)
             self.assertEqual(get("/static/rich-text.js")[0],200)
             self.assertEqual(get("/static/selection-quote.js")[0],200)
