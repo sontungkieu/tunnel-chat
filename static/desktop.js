@@ -92,6 +92,7 @@ function notice(text="") {$("notice").textContent=text;$("notice").hidden=!text;
 function formatLoaderBytes(progress) {
   const received=Number(progress?.receivedBytes),total=Number(progress?.totalBytes);
   if(!Number.isFinite(received) || !Number.isFinite(total) || total<=0)return "";
+  if(total<1024)return `${Math.round(received)}/${Math.round(total)} B`;
   const unit=total>=1048576?"MiB":"KiB",scale=unit==="MiB"?1048576:1024;
   const digits=total/scale>=10?0:1;
   return `${(received/scale).toFixed(digits)}/${(total/scale).toFixed(digits)} ${unit}`;
@@ -757,14 +758,29 @@ $("composer").onsubmit=async event=>{
   if(!draft && mode==="steer" && !expectedTurnId){notice("Không có lượt đang chạy để gửi chỉ dẫn.");return;}
   setBusy(true);notice();
   const operation_id=operationId();
+  const sendStartedAt=performance.now(),elapsed=()=>Math.max(0,(performance.now()-sendStartedAt)/1000);
+  const progressBytes=(blob,completed)=>Math.min(blob.size,Math.max(0,completed)*transport.chunkBytes);
   let submissionStarted=false;
+  setChatLoading(true,{label:"Đang chuẩn bị gửi tin nhắn",elapsed:elapsed()});
   try {
+    while(polling)await wait(50);
+    setChatLoading(true,{label:"Đang chuẩn bị gửi tin nhắn",elapsed:elapsed()});
     const attachment_ids=[];
-    for(const file of files) {
+    const totalFileBytes=files.reduce((sum,file)=>sum+file.size,0);
+    let sentFileBytes=0;
+    for(const [fileIndex,file] of files.entries()) {
+      setChatLoading(true,{label:"Đang tải tệp đính kèm",progress:{percent:totalFileBytes?sentFileBytes/totalFileBytes*100:0,
+        receivedBytes:sentFileBytes,totalBytes:totalFileBytes},elapsed:elapsed(),detail:`${fileIndex+1}/${files.length} · ${file.name}`});
       const uploaded=await RLCSDTransport.uploadBlob({rpc:uploads,blob:file,...transport,
         chunkBytes:transport.chunkBytes,paths:{start:"attachment/start",chunk:"attachment/chunk",status:"attachment/status",finish:"attachment/finish"},
-        startPayload:{chat_id:chatId,filename:file.name,mime_type:file.type}});
+        startPayload:{chat_id:chatId,filename:file.name,mime_type:file.type},
+        onProgress:(completed,total)=>{
+          const received=sentFileBytes+progressBytes(file,completed);
+          setChatLoading(true,{label:"Đang tải tệp đính kèm",progress:{percent:totalFileBytes?received/totalFileBytes*100:completed/total*100,
+            receivedBytes:received,totalBytes:totalFileBytes},elapsed:elapsed(),detail:`${fileIndex+1}/${files.length} · ${file.name}`});
+        }});
       attachment_ids.push(uploaded.attachment.id);
+      sentFileBytes+=file.size;
     }
     const sendData={chat_id:chatId,mode,expectedTurnId,operation_id,attachment_ids};
     if(draft)sendData.create=true;
@@ -772,22 +788,37 @@ $("composer").onsubmit=async event=>{
       if($("modelSelect").value)sendData.model=$("modelSelect").value;
       if($("effortSelect").value)sendData.effort=$("effortSelect").value;
     }
+    const promptBlob=new Blob([text]);
+    setChatLoading(true,{label:"Đang tải nội dung tin nhắn",progress:{percent:0,receivedBytes:0,totalBytes:promptBlob.size},
+      elapsed:elapsed(),detail:"Đang chia nội dung thành các phần"});
     const promptRpc=(path,payload,options)=>{
-      if(path==="prompt/finish") {submissionStarted=true;return rpc(path,{...sendData,...payload},{attempts:1});}
+      if(path==="prompt/finish") {
+        submissionStarted=true;
+        setChatLoading(true,{label:"Đang chuyển lượt tới Codex Desktop",elapsed:elapsed(),detail:"Đang chờ Desktop nhận tin nhắn"});
+        return rpc(path,{...sendData,...payload},{attempts:1});
+      }
       return uploads(path,payload,options);
     };
-    const submitted=await RLCSDTransport.uploadBlob({rpc:promptRpc,blob:new Blob([text]),...transport,
+    const submitted=await RLCSDTransport.uploadBlob({rpc:promptRpc,blob:promptBlob,...transport,
       chunkBytes:transport.chunkBytes,paths:{start:"prompt/start",chunk:"prompt/chunk",status:"prompt/status",finish:"prompt/finish"},
-      startPayload:{chat_id:chatId,attachment_ids}});
+      startPayload:{chat_id:chatId,attachment_ids},onProgress:(completed,total)=>{
+        const received=progressBytes(promptBlob,completed);
+        setChatLoading(true,{label:"Đang tải nội dung tin nhắn",progress:{percent:completed/total*100,
+          receivedBytes:received,totalBytes:promptBlob.size},elapsed:elapsed(),detail:`${completed}/${total} phần`});
+      }});
     if(draft) {
       const created=await waitForCreate(submitted.create_id);
       newProjectDraft=null;active=created.chat_id;sessionStorage.setItem("desktopActiveChat",String(active));
       messageKey="";requestKey="";renderState(created.state);await list();
-    } else await refresh();
+    } else {
+      setChatLoading(true,{label:"Đang đồng bộ tin nhắn vào hội thoại",elapsed:elapsed(),detail:"Đang nhận snapshot mới"});
+      await refresh();
+    }
     $("prompt").value="";$("files").value="";$("filesLabel").textContent="";clearPendingQuote();
   } catch(e) {
+    setChatLoading(false);
     notice(e.message+(submissionStarted?"\nNếu kết quả gửi chưa rõ, hãy kiểm tra hội thoại trước khi gửi lại.":""));
-  } finally {setBusy(false);}
+  } finally {if(!pendingMediaRevision)setChatLoading(false);setBusy(false);}
 };
 $("prompt").onkeydown=event=>{if((event.ctrlKey || event.metaKey)&&event.key==="Enter"){event.preventDefault();$("composer").requestSubmit();}};
 $("mode").onchange=updateControls;

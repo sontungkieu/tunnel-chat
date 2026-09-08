@@ -5,8 +5,10 @@ Open: http://127.0.0.1:18787/codex#token=preview-only
 Link: 11111111-1111-4111-8111-111111111111
 """
 from pathlib import Path
+import os
 import sys
 import tempfile
+import time
 import uuid
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import desktop
@@ -83,6 +85,7 @@ def fake_call(config,action,task=None,data=None,refresh=False,progress=None,time
     if task!=TASK:raise ValueError("This fixture accepts only "+TASK)
     if action=="state":return state
     if action=="send":
+        time.sleep(max(0,float(os.environ.get("PREVIEW_SEND_DELAY","0"))))
         state["messages"].append({"id":str(uuid.uuid4()),"role":"user","text":data["text"]})
         state["status"]="running";state["activeTurnId"]="demo-turn"
     elif action=="cancel":

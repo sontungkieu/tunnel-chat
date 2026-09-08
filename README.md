@@ -150,7 +150,10 @@ values remain metadata and are never resolved as Linux paths.
   patches; the browser refreshes its projection every 1.5 seconds. Normal polling
   does not reload history or call a model.
 - Send a new turn while idle. To steer a running turn, explicitly select
-  **Chỉ dẫn cho lượt đang chạy**.
+  **Chỉ dẫn cho lượt đang chạy**. From the moment **Gửi** is pressed, the chat
+  loader reports attachment upload, chunked prompt upload, Desktop handoff and
+  final conversation synchronization. Long prompts and files show byte/chunk
+  progress instead of leaving the page in an indistinguishable busy state.
 - Before a new turn, choose a model and reasoning effort or leave either selector
   on **Theo task** to inherit the task's current setting. The controls are locked
   while steering an active turn. Codex Desktop still enforces model availability
