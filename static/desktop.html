@@ -79,6 +79,10 @@
         <label for="prompt" class="sr-only">Tin nhắn</label>
         <textarea id="prompt" rows="3" placeholder="Gửi tin nhắn tới task… Ctrl+Enter để gửi"></textarea>
         <div id="filesLabel" class="muted small"></div>
+        <div class="generation-controls" aria-label="Cấu hình lượt mới">
+          <label><span>Model</span><select id="modelSelect" aria-label="Model cho lượt mới"></select></label>
+          <label><span>Effort</span><select id="effortSelect" aria-label="Reasoning effort cho lượt mới"></select></label>
+        </div>
         <footer>
           <label class="file-button"><span aria-hidden="true">＋</span> Đính kèm<input id="files" type="file" multiple></label>
           <select id="mode" aria-label="Cách gửi"><option value="start">Lượt mới</option><option value="steer">Chỉ dẫn cho lượt đang chạy</option></select>

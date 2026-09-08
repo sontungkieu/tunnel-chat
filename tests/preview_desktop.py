@@ -16,7 +16,7 @@ TASK="11111111-1111-4111-8111-111111111111"
 OTHER_TASKS=[(f"22222222-2222-4222-8222-{index:012x}",f"Task minh họa {index:02d}") for index in range(1,19)]
 state={"threadId":TASK,"title":"Demo · kiểm thử giao diện","cwd":r"D:\dev\demo",
     "project":"demo","projectPath":r"D:\dev\demo","backend":"desktop","hostId":"local",
-    "model":"simulator","status":"running","activity":"tool","activeTurnId":"demo-turn",
+    "model":"simulator","effort":"high","status":"running","activity":"tool","activeTurnId":"demo-turn",
     "latestTurnId":"demo-turn","revision":1,"messages":[{"id":"welcome","role":"assistant","text":r"""## Kết quả mô phỏng
 
 Markdown có **chữ đậm**, *chữ nghiêng*, [liên kết](https://katex.org/) và bảng:

@@ -4,7 +4,7 @@ const net=require('node:net');
 const {test}=require('node:test');
 const {Decoder,frame,applyPatches,projectState,taskSummary,validateApprovalDecision,normalizeUserInputResponse,DesktopClient}=require('../desktop_ipc.cjs');
 const ID='11111111-1111-4111-8111-111111111111';
-const sample=()=>({id:ID,title:'test',cwd:'D:\\work',latestModel:'test-model',threadRuntimeStatus:{type:'idle'},
+const sample=()=>({id:ID,title:'test',cwd:'D:\\work',latestModel:'test-model',latestReasoningEffort:'high',threadRuntimeStatus:{type:'idle'},
   turns:[{turnId:'turn-1',status:'completed',params:{input:[{type:'text',text:'hello'}]},
     items:[{type:'agentMessage',id:'a',text:'reply'},{type:'reasoning',text:'must not be exported'}]}],requests:[]});
 test('frames survive byte fragmentation and concatenation',()=>{
@@ -38,6 +38,8 @@ test('canonical history is ordered and hidden reasoning is omitted',()=>{
   assert.equal(view.messages.at(-1).text,'reply');
   assert.ok(!JSON.stringify(view).includes('must not be exported'));
   assert.equal(view.cwd,'D:\\work');
+  assert.equal(view.model,'test-model');
+  assert.equal(view.effort,'high');
 });
 test('projected user messages remove app context and canonical duplicates',()=>{
   const s=sample(),wrapped=`\n<in-app-browser-context source="ambient-ui-state">\nprivate UI metadata\n</in-app-browser-context>\n\n## My request:\nhello`;
@@ -144,6 +146,16 @@ test('follower sends to owner and inherits settings without overriding runtime',
     context:{inheritThreadSettings:true}});
   assert.equal(sent.hostId,undefined);
 });
+test('new turns can select a validated model and reasoning effort',async t=>{
+  const f=await fixture(t);await f.client.state(ID);
+  await f.client.act(ID,'send',{text:'next',mode:'start',model:'gpt-6-astra',effort:'ultra'});
+  const request=f.seen.at(-1).params.turnStart.request;
+  assert.equal(request.model,'gpt-6-astra');
+  assert.equal(request.effort,'ultra');
+  assert.deepEqual(request.input,[{type:'text',text:'next',text_elements:[]}]);
+  await assert.rejects(f.client.act(ID,'send',{text:'bad',mode:'start',model:'../../bad'}),/Invalid model/);
+  await assert.rejects(f.client.act(ID,'send',{text:'bad',mode:'start',effort:'extreme'}),/Invalid reasoning effort/);
+});
 test('sidebar summaries follow tasks without loading full history',async t=>{
   const f=await fixture(t);
   assert.deepEqual(f.client.summaries([ID,'invalid']),{});
@@ -169,6 +181,8 @@ test('cancel carries exact active turn; stale stop and implicit steering are rej
   assert.equal(f.seen.at(-1).params.mode,'user-stop');
   await f.client.act(ID,'send',{text:'adjust',mode:'steer',expectedTurnId:'turn-1'});
   assert.equal(f.seen.at(-1).method,'thread-follower-steer-turn');
+  await assert.rejects(f.client.act(ID,'send',{text:'adjust',mode:'steer',expectedTurnId:'turn-1',effort:'high'}),
+    /while steering/);
 });
 test('changed owner refuses mutation instead of creating another session',async t=>{
   const f=await fixture(t);await f.client.state(ID);f.setOwner('different');

@@ -1,6 +1,6 @@
 'use strict';
 // Independently implemented client for the desktop app's local follower protocol.
-// Experimental: validated with app 26.901.1978.0, stream schema version 11.
+// Experimental: validated with app 26.901.6511.0, stream schema version 11.
 const net = require('node:net');
 const crypto = require('node:crypto');
 const readline = require('node:readline');
@@ -11,6 +11,8 @@ const {EventEmitter} = require('node:events');
 const MAX_FRAME = 128 * 1024 * 1024;
 const MAX_PROJECTED_MESSAGES = 600;
 const MAX_USER_INPUT_RESPONSE_BYTES = 64 * 1024;
+const MODEL_PATTERN=/^[a-z0-9][a-z0-9._-]{0,79}$/;
+const REASONING_EFFORTS=new Set(['low','medium','high','xhigh','max','ultra']);
 const VERSIONS = {'initialize':0, 'thread-owner-discovery':1,
   'thread-follower-load-complete-history':1, 'thread-follower-start-turn':2,
   'thread-follower-steer-turn':1, 'thread-follower-interrupt-turn':4,
@@ -20,6 +22,18 @@ const SIMPLE_APPROVAL_DECISIONS=new Set(['accept','acceptForSession','decline','
 const STRUCTURED_APPROVAL_DECISIONS=new Set([
   'acceptWithExecpolicyAmendment','applyNetworkPolicyAmendment',
 ]);
+function optionalModel(value) {
+  if (value===undefined || value===null || value==='') return null;
+  const model=String(value).trim();
+  if (!MODEL_PATTERN.test(model)) throw Error('Invalid model');
+  return model;
+}
+function optionalEffort(value) {
+  if (value===undefined || value===null || value==='') return null;
+  const effort=String(value).trim();
+  if (!REASONING_EFFORTS.has(effort)) throw Error('Invalid reasoning effort');
+  return effort;
+}
 function approvalDecisionKind(decision) {
   if (typeof decision==='string') return SIMPLE_APPROVAL_DECISIONS.has(decision) ? decision : null;
   if (!decision || Array.isArray(decision) || Object.getPrototypeOf(decision)!==Object.prototype) return null;
@@ -265,7 +279,8 @@ function projectState(state, revision) {
   return {threadId:state.id,title:state.title || state.generatedTitle || state.id,
     cwd:state.cwd || '',backend:'desktop',hostId:'local',
     project:project.project,projectPath:project.projectPath,
-    model:state.latestModel || '',...summary,
+    model:state.latestModel || '',
+    effort:state.latestThreadSettings?.effort || state.latestReasoningEffort || null,...summary,
     messages,
     requests:(state.requests || []).map(r=>({id:r.id,method:r.method,params:r.params})),
     historyTruncated:messageCount>MAX_PROJECTED_MESSAGES};
@@ -445,6 +460,9 @@ class DesktopClient extends EventEmitter {
     const snapshot=projectState(task.state,task.revision);
     let method,params={conversationId:id};
     if (action==='send') {
+      const model=optionalModel(data.model),effort=optionalEffort(data.effort);
+      if (data.mode==='steer' && (model || effort))
+        throw Error('Cannot change model or reasoning effort while steering.');
       if (snapshot.status==='running' && data.mode!=='steer') throw Error('Task is running; choose steer or wait.');
       if (snapshot.status!=='running' && data.mode==='steer') throw Error('Turn finished; refresh and send a new turn.');
       if (snapshot.status==='running' && data.expectedTurnId!==snapshot.activeTurnId)
@@ -462,7 +480,10 @@ class DesktopClient extends EventEmitter {
             imageAttachments:[],ideContext:null,workspaceRoots:[snapshot.cwd]}}};
       } else {
         method='thread-follower-start-turn';
-        params.turnStart={request:{threadId:id,input},context:{inheritThreadSettings:true}};
+        const request={threadId:id,input};
+        if (model) request.model=model;
+        if (effort) request.effort=effort;
+        params.turnStart={request,context:{inheritThreadSettings:true}};
       }
     } else if (action==='cancel') {
       if (!snapshot.activeTurnId || data.expectedTurnId!==snapshot.activeTurnId) throw Error('Active turn changed; refresh before stopping.');

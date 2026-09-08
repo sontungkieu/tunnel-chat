@@ -141,6 +141,10 @@ values remain metadata and are never resolved as Linux paths.
   does not reload history or call a model.
 - Send a new turn while idle. To steer a running turn, explicitly select
   **Chỉ dẫn cho lượt đang chạy**.
+- Before a new turn, choose a model and reasoning effort or leave either selector
+  on **Theo task** to inherit the task's current setting. The controls are locked
+  while steering an active turn. Codex Desktop still enforces model availability
+  for the signed-in account.
 - Stop uses the exact displayed active turn ID. It never kills the shared app.
 - Command/file approvals can be reviewed and answered remotely. The page shows
   only the exact choices advertised by Codex Desktop: one-time approval,
@@ -200,7 +204,7 @@ tasks no longer need them. Original uploads stay under `data/codex_attachments/`
 ### Compatibility boundary
 
 This is an **experimental internal desktop IPC integration**, independently
-implemented against app `26.901.1978.0` (stream schema version 11). It is not a
+implemented against app `26.901.6511.0` (stream schema version 11). It is not a
 documented public remote API. Unsupported versions, missing owners, stale turn IDs
 and disconnected clients fail closed. Snapshot frames are capped at 128 MiB and
 complete-history requests at three minutes. Future app updates can require an
@@ -212,8 +216,9 @@ they do not submit a live model turn.
 
 Desktop mode supports local Codex tasks, not ordinary ChatGPT cloud conversations
 or remote hosts. The page displays the most recent 600 message/activity entries;
-reasoning and configuration are not exported. Use the desktop app for task
-creation, model/runtime changes, request types the page cannot render and older history.
+reasoning details and arbitrary configuration are not exported. Use the desktop
+app for task creation, runtime changes, request types the page cannot render and
+older history.
 
 ## WSL CLI and manual queue
 

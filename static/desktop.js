@@ -13,7 +13,18 @@ try {
   const saved=JSON.parse(localStorage.getItem("desktopTaskReadState") || "{}");
   if(saved && !Array.isArray(saved) && typeof saved==="object")taskReadState=saved;
 } catch(_error) {}
-let transport = {chunkBytes:6144,concurrency:3,retryLimit:4};
+let transport = {chunkBytes:2048,concurrency:3,retryLimit:4};
+let generationChat=0;
+const MODEL_EFFORTS={
+  "gpt-6-astra":["low","medium","high","xhigh","max","ultra"],
+  "gpt-5.6-sol":["low","medium","high","xhigh","max","ultra"],
+  "gpt-5.6-terra":["low","medium","high","xhigh","max","ultra"],
+  "gpt-5.6-luna":["low","medium","high","xhigh","max"],
+  "gpt-5.5":["low","medium","high","xhigh"],
+  "gpt-5.4-mini":["low","medium","high","xhigh"],
+  "gpt-5.3-codex-spark":["low","medium","high","xhigh"],
+};
+const ALL_EFFORTS=["low","medium","high","xhigh","max","ultra"];
 const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết nối Codex Desktop",
   cached:"Đang dùng snapshot đã tải",discovering:"Đang tìm tiến trình sở hữu task",
   "loading-history":"Đang yêu cầu toàn bộ lịch sử",
@@ -69,14 +80,40 @@ function operationId() {
   return h.slice(0,8)+"-"+h.slice(8,12)+"-"+h.slice(12,16)+"-"+h.slice(16,20)+"-"+h.slice(20);
 }
 function notice(text="") {$("notice").textContent=text;$("notice").hidden=!text;}
+function selectOption(value,label=value) {
+  const option=document.createElement("option");option.value=value;option.textContent=label;return option;
+}
+function rebuildEffortChoices() {
+  const select=$("effortSelect"),selected=select.value,model=$("modelSelect").value;
+  const efforts=MODEL_EFFORTS[model] || ALL_EFFORTS;
+  select.replaceChildren(selectOption("","Theo task · mặc định"),...efforts.map(value=>selectOption(value,value)));
+  select.value=efforts.includes(selected)?selected:"";
+}
+function initializeGenerationControls() {
+  $("modelSelect").replaceChildren(selectOption("","Theo task · mặc định"),
+    ...Object.keys(MODEL_EFFORTS).map(value=>selectOption(value,value)));
+  rebuildEffortChoices();
+  $("modelSelect").onchange=()=>{rebuildEffortChoices();updateControls();};
+}
+function syncGenerationControls(state) {
+  if(generationChat!==active) {
+    generationChat=active;$("modelSelect").value="";rebuildEffortChoices();
+  }
+  $("modelSelect").options[0].textContent=`Theo task · ${state.model || "mặc định"}`;
+  $("effortSelect").options[0].textContent=`Theo task · ${state.effort || "mặc định"}`;
+}
+initializeGenerationControls();
 function updateControls() {
   const unavailable=busy || !token;
+  const canConfigure=!unavailable && !!snapshot && snapshot.status!=="running" && $("mode").value==="start";
   $("send").disabled=unavailable || !snapshot;
   $("stop").disabled=unavailable || !snapshot?.activeTurnId;
   $("thread").disabled=unavailable;
   $("linkButton").disabled=unavailable;
   $("files").disabled=unavailable;
   $("mode").disabled=unavailable;
+  $("modelSelect").disabled=!canConfigure;
+  $("effortSelect").disabled=!canConfigure;
   $("prompt").disabled=unavailable;
   $("reconnect").disabled=unavailable;
   $("logout").disabled=busy;
@@ -220,6 +257,7 @@ function toolCard(message) {
 }
 function renderState(state) {
   snapshot=state;
+  syncGenerationControls(state);
   $("title").textContent=state.title;
   const project=state.project || (state.cwd || "").replace(/[\\/]+$/,"").split(/[\\/]/).at(-1);
   $("meta").textContent=[project?`Project: ${project}`:"Project: chưa xác định",state.model,state.cwd,"Desktop · local"].filter(Boolean).join(" · ");
@@ -491,6 +529,10 @@ $("composer").onsubmit=async event=>{
       attachment_ids.push(uploaded.attachment.id);
     }
     const sendData={chat_id:chatId,mode,expectedTurnId,operation_id,attachment_ids};
+    if(mode==="start") {
+      if($("modelSelect").value)sendData.model=$("modelSelect").value;
+      if($("effortSelect").value)sendData.effort=$("effortSelect").value;
+    }
     const promptRpc=(path,payload,options)=>{
       if(path==="prompt/finish") {submissionStarted=true;return rpc(path,{...sendData,...payload},{attempts:1});}
       return uploads(path,payload,options);
@@ -505,6 +547,7 @@ $("composer").onsubmit=async event=>{
   } finally {setBusy(false);}
 };
 $("prompt").onkeydown=event=>{if((event.ctrlKey || event.metaKey)&&event.key==="Enter"){event.preventDefault();$("composer").requestSubmit();}};
+$("mode").onchange=updateControls;
 $("stop").onclick=async()=>{
   if(!snapshot?.activeTurnId || busy)return;
   setBusy(true);notice();
