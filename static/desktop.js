@@ -7,7 +7,7 @@ const uploads = RLCSDTransport.createRpc({apiBase:"/c",token,retryLimit:1});
 let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
 let snapshot = null, busy = false, polling = false, requestKey = "", messageKey = "";
 let messageImageUrls = [], imageRenderRevision = 0, sidebarSyncAt = 0;
-let collapsedProjects = new Set(), taskReadState = {};
+let collapsedProjects = new Set(), taskReadState = {}, newProjectDraft = null;
 try {collapsedProjects=new Set(JSON.parse(sessionStorage.getItem("desktopCollapsedProjects") || "[]"));} catch(_error) {}
 try {
   const saved=JSON.parse(localStorage.getItem("desktopTaskReadState") || "{}");
@@ -30,6 +30,14 @@ const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết 
   "loading-history":"Đang yêu cầu toàn bộ lịch sử",
   "receiving-history":"Đang nhận snapshot lịch sử", "waiting-snapshot":"Đang chờ snapshot",
   projecting:"Đang dựng giao diện",complete:"Đã tải xong"};
+const createStages={queued:"Đang xếp yêu cầu tạo task",
+  "bootstrapping-controller":"Đang chuẩn bị bộ tạo task cho project",
+  "controller-ready":"Đã chuẩn bị bộ tạo task",connecting:"Đang kết nối Codex Desktop",
+  discovering:"Đang tìm task điều phối","loading-history":"Đang tải task điều phối",
+  "receiving-history":"Đang nhận dữ liệu task điều phối","waiting-snapshot":"Đang chờ Desktop",
+  "waiting-controller":"Đang chờ bộ tạo task sẵn sàng",
+  "creating-task":"Codex Desktop đang tạo task mới","linking-task":"Đang kết nối task mới",
+  projecting:"Đang dựng giao diện",complete:"Task mới đã sẵn sàng"};
 const activityLabels={thinking:"Đang suy nghĩ",tool:"Đang chạy công cụ",waiting:"Đang chờ bạn",
   finalizing:"Đang hoàn tất câu trả lời",working:"Agent đang làm việc",completed:"Đã trả lời xong",
   interrupted:"Đã dừng",failed:"Có lỗi",idle:"Sẵn sàng"};
@@ -104,18 +112,18 @@ function syncGenerationControls(state) {
 }
 initializeGenerationControls();
 function updateControls() {
-  const unavailable=busy || !token;
-  const canConfigure=!unavailable && !!snapshot && snapshot.status!=="running" && $("mode").value==="start";
-  $("send").disabled=unavailable || !snapshot;
-  $("stop").disabled=unavailable || !snapshot?.activeTurnId;
+  const unavailable=busy || !token,draft=!!newProjectDraft;
+  const canConfigure=!unavailable && (draft || (!!snapshot && snapshot.status!=="running" && $("mode").value==="start"));
+  $("send").disabled=unavailable || (!snapshot && !draft);
+  $("stop").disabled=unavailable || draft || !snapshot?.activeTurnId;
   $("thread").disabled=unavailable;
   $("linkButton").disabled=unavailable;
-  $("files").disabled=unavailable;
-  $("mode").disabled=unavailable;
+  $("files").disabled=unavailable || draft;
+  $("mode").disabled=unavailable || draft;
   $("modelSelect").disabled=!canConfigure;
   $("effortSelect").disabled=!canConfigure;
-  $("prompt").disabled=unavailable;
-  $("reconnect").disabled=unavailable;
+  $("prompt").disabled=unavailable || (!snapshot && !draft);
+  $("reconnect").disabled=unavailable || draft;
   $("logout").disabled=busy;
   document.querySelectorAll("#requests button,#requests input,#requests textarea").forEach(control=>{
     if(control.dataset.conditional) {
@@ -138,6 +146,36 @@ async function loadTask(payload) {
     notice(`${loadStages[job.stage] || "Đang tải task"}${percent}${bytes} · ${Math.floor(job.elapsed_seconds)} giây`);
     await wait(750);
   }
+}
+async function waitForCreate(createId) {
+  while(true) {
+    const job=await rpc("create/status",{create_id:createId},{attempts:4});
+    if(job.status==="complete") {notice();return job.result;}
+    if(job.status==="error") throw new Error(job.error || "Không tạo được task");
+    notice(`${createStages[job.stage] || "Đang tạo task mới"} · ${Math.floor(job.elapsed_seconds)} giây`);
+    await wait(750);
+  }
+}
+function renderCreateDraft() {
+  snapshot=null;messageKey="";requestKey="";releaseMessageImages();
+  $("title").textContent="Task mới";
+  $("meta").textContent=`Project: ${newProjectDraft.name} · ${newProjectDraft.path} · Desktop · local`;
+  updateActivity("idle","Soạn yêu cầu đầu tiên");
+  $("activityDetail").textContent="Task sẽ được tạo trong project này khi bạn gửi tin nhắn đầu tiên.";
+  $("messages").replaceChildren(textElement("div","Nhập yêu cầu đầu tiên, chọn model và effort nếu cần, rồi bấm Gửi.","empty create-empty"));
+  $("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="Có thể đính kèm sau khi task được tạo.";
+  $("mode").value="start";generationChat=0;$("modelSelect").value="";rebuildEffortChoices();
+  $("modelSelect").options[0].textContent="Mặc định của app";
+  $("effortSelect").options[0].textContent="Mặc định của app";
+  updateControls();$("prompt").focus();
+}
+function startProjectTask(group) {
+  if(busy || !token)return;
+  const source=group.chats.find(chat=>chat.status!=="running") || group.chats[0];
+  if(!source){notice("Project này chưa có task Desktop làm điểm kết nối.");return;}
+  active=Number(source.id);
+  newProjectDraft={sourceChatId:active,name:group.name,path:group.path,key:group.key};
+  setSidebar(false);notice();renderCreateDraft();
 }
 function textElement(tag,text,className) {
   const element=document.createElement(tag);element.textContent=String(text || "");
@@ -437,6 +475,9 @@ async function list() {
     const details=textElement("details","","project-group");
     details.open=!collapsedProjects.has(group.key);
     const summary=document.createElement("summary");summary.title=group.path || "Project chưa xác định";
+    const add=textElement("button","＋","project-new");add.type="button";
+    add.title=`Tạo task mới trong ${group.name}`;add.setAttribute("aria-label",add.title);
+    add.onclick=event=>{event.preventDefault();event.stopPropagation();startProjectTask(group);};
     summary.append(textElement("span",group.name,"project-name"),textElement("span",group.chats.length,"project-count"));
     const tasks=textElement("div","","project-tasks");
     for(const chat of group.chats) {
@@ -448,7 +489,7 @@ async function list() {
         if(busy) return;
         setSidebar(false);
         setBusy(true);notice();
-        active=Number(chat.id);sessionStorage.setItem("desktopActiveChat",String(active));
+        active=Number(chat.id);newProjectDraft=null;sessionStorage.setItem("desktopActiveChat",String(active));
         snapshot=null;messageKey="";requestKey="";$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
         updateControls();
         try {await list();await refresh();}
@@ -457,7 +498,7 @@ async function list() {
       };
       tasks.append(button);updateTaskIndicator(chat,false,button);
     }
-    details.append(summary,tasks);
+    details.append(summary,add,tasks);
     details.ontoggle=()=>{details.open?collapsedProjects.delete(group.key):collapsedProjects.add(group.key);rememberProjectGroups();};
     $("taskList").append(details);
   }
@@ -476,7 +517,7 @@ async function syncSidebarStatuses() {
   catch(_error) {}
 }
 async function refresh(force=false) {
-  if(!active || polling) return;
+  if(!active || polling || newProjectDraft) return;
   polling=true;
   const selected=active;
   try {
@@ -493,7 +534,7 @@ $("linkForm").onsubmit=async event=>{
   event.preventDefault();setBusy(true);notice();
   try {
     const data=await loadTask({thread:$("thread").value});
-    active=data.chat_id;sessionStorage.setItem("desktopActiveChat",String(active));
+    active=data.chat_id;newProjectDraft=null;sessionStorage.setItem("desktopActiveChat",String(active));
     messageKey="";requestKey="";renderState(data.state);
     $("files").value="";$("filesLabel").textContent="";await list();setSidebar(false);
   }catch(e){notice(e.message);}finally{setBusy(false);}
@@ -511,12 +552,14 @@ $("files").onchange=()=>{
 };
 $("composer").onsubmit=async event=>{
   event.preventDefault();
-  if(busy || !snapshot) return;
-  const chatId=active, mode=$("mode").value, expectedTurnId=snapshot.activeTurnId;
+  if(busy || (!snapshot && !newProjectDraft)) return;
+  const draft=newProjectDraft,chatId=draft?.sourceChatId || active;
+  const mode=draft ? "start" : $("mode").value,expectedTurnId=draft ? null : snapshot.activeTurnId;
   const text=$("prompt").value.trim(), files=Array.from($("files").files);
   if(!text && !files.length) return;
-  if(snapshot.status==="running" && mode!=="steer"){notice("Task đang chạy. Chọn gửi chỉ dẫn hoặc chờ lượt này kết thúc.");return;}
-  if(mode==="steer" && !expectedTurnId){notice("Không có lượt đang chạy để gửi chỉ dẫn.");return;}
+  if(draft && files.length){notice("Hãy tạo task trước, rồi đính kèm file ở lượt tiếp theo.");return;}
+  if(!draft && snapshot.status==="running" && mode!=="steer"){notice("Task đang chạy. Chọn gửi chỉ dẫn hoặc chờ lượt này kết thúc.");return;}
+  if(!draft && mode==="steer" && !expectedTurnId){notice("Không có lượt đang chạy để gửi chỉ dẫn.");return;}
   setBusy(true);notice();
   const operation_id=operationId();
   let submissionStarted=false;
@@ -529,6 +572,7 @@ $("composer").onsubmit=async event=>{
       attachment_ids.push(uploaded.attachment.id);
     }
     const sendData={chat_id:chatId,mode,expectedTurnId,operation_id,attachment_ids};
+    if(draft)sendData.create=true;
     if(mode==="start") {
       if($("modelSelect").value)sendData.model=$("modelSelect").value;
       if($("effortSelect").value)sendData.effort=$("effortSelect").value;
@@ -537,11 +581,15 @@ $("composer").onsubmit=async event=>{
       if(path==="prompt/finish") {submissionStarted=true;return rpc(path,{...sendData,...payload},{attempts:1});}
       return uploads(path,payload,options);
     };
-    await RLCSDTransport.uploadBlob({rpc:promptRpc,blob:new Blob([text]),...transport,
+    const submitted=await RLCSDTransport.uploadBlob({rpc:promptRpc,blob:new Blob([text]),...transport,
       chunkBytes:transport.chunkBytes,paths:{start:"prompt/start",chunk:"prompt/chunk",status:"prompt/status",finish:"prompt/finish"},
       startPayload:{chat_id:chatId,attachment_ids}});
+    if(draft) {
+      const created=await waitForCreate(submitted.create_id);
+      newProjectDraft=null;active=created.chat_id;sessionStorage.setItem("desktopActiveChat",String(active));
+      messageKey="";requestKey="";renderState(created.state);await list();
+    } else await refresh();
     $("prompt").value="";$("files").value="";$("filesLabel").textContent="";
-    await refresh();
   } catch(e) {
     notice(e.message+(submissionStarted?"\nNếu kết quả gửi chưa rõ, hãy kiểm tra hội thoại trước khi gửi lại.":""));
   } finally {setBusy(false);}

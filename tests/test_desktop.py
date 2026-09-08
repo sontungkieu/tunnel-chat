@@ -117,6 +117,54 @@ class DesktopTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"uncertain"):desktop.mutate(server,chat,"cancel",data)
             call.assert_called_once()
 
+    def test_task_creation_persists_project_controller_and_deduplicates(self):
+        source=self.chat();child=str(uuid.uuid4());controller=str(uuid.uuid4())
+        result={"threadId":child,"controllerThreadId":controller,"controllerCreated":True,
+                "state":{"threadId":child,"title":"new task","cwd":r"D:\work",
+                         "status":"running","messages":[]}}
+        operation=str(uuid.uuid4())
+        payload={"operation_id":operation,"text":"first prompt","model":"gpt-6-astra","effort":"high"}
+        with mock.patch.object(desktop.BRIDGE,"call",return_value=result) as call:
+            created=desktop.create_task(server,source,payload)
+            repeated=desktop.create_task(server,source,payload)
+        self.assertEqual(created,repeated)
+        self.assertEqual(created["state"]["title"],"new task")
+        self.assertEqual(desktop.project_controller(server,r"D:\work"),controller)
+        self.assertEqual(server.get_codex_chat(created["chat_id"])["codex_session_id"],child)
+        call.assert_called_once()
+
+    def test_background_creation_exposes_progress_and_result(self):
+        source=self.chat()
+        def fake_create(_server,chat_id,data,progress=None):
+            self.assertEqual(chat_id,source);self.assertEqual(data["text"],"hello")
+            progress({"stage":"creating-task"})
+            return {"chat_id":9,"state":{"threadId":str(uuid.uuid4())}}
+        with mock.patch.object(desktop,"create_task",side_effect=fake_create):
+            started=desktop.start_create(server,source,{"operation_id":str(uuid.uuid4())},"hello")
+            for _ in range(100):
+                status=desktop.create_status({"create_id":started["create_id"]})
+                if status["status"]!="creating":
+                    break
+                time.sleep(0.01)
+        self.assertEqual(status["status"],"complete")
+        self.assertEqual(status["result"]["chat_id"],9)
+
+    def test_chunked_first_prompt_starts_background_creation(self):
+        source=self.chat();body=b"a long first prompt"
+        upload=server.create_codex_prompt_upload(source,len(body),1,[])
+        encoded=base64.urlsafe_b64encode(body).decode().rstrip("=")
+        server.add_codex_prompt_chunk(upload,0,encoded)
+        operation=str(uuid.uuid4())
+        expected={"create_id":str(uuid.uuid4()),"status":"creating","stage":"queued"}
+        with mock.patch.object(server,"load_config",return_value={"desktop_enabled":"1"}), \
+             mock.patch.object(desktop,"start_create",return_value=expected) as start:
+            result=desktop.dispatch(server,"prompt/finish",{
+                "chat_id":source,"upload_id":upload,"create":True,"operation_id":operation})
+        self.assertEqual(result,expected)
+        start.assert_called_once()
+        self.assertEqual(start.call_args.args[2]["operation_id"],operation)
+        self.assertEqual(start.call_args.args[3],body.decode())
+
     def test_attachment_ownership_checked_before_staging(self):
         chat=self.chat()
         with mock.patch.object(desktop.BRIDGE,"call") as call:

@@ -221,6 +221,9 @@ def init_schema(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS desktop_actions (
         operation_id TEXT PRIMARY KEY, chat_id INTEGER NOT NULL, action TEXT NOT NULL,
         fingerprint TEXT NOT NULL, status TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS desktop_project_controllers (
+        project_key TEXT PRIMARY KEY, project_path TEXT NOT NULL,
+        controller_thread_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
 
 
 def require_chat(server, chat_id):
@@ -400,6 +403,150 @@ def mutate(server, chat_id, action, data):
     return result
 
 
+
+CREATE_JOBS = {}
+CREATE_JOBS_LOCK = threading.Lock()
+CREATE_TTL_SECONDS = 30 * 60
+
+
+def project_key(value: str) -> str:
+    normalized = str(value or "").rstrip("\\/").casefold()
+    if not normalized:
+        raise ValueError("The selected task has no project path")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def project_controller(server, path: str) -> str | None:
+    with server.connect() as conn:
+        row = conn.execute("""SELECT controller_thread_id FROM desktop_project_controllers
+                            WHERE project_key=?""", (project_key(path),)).fetchone()
+    return row[0] if row else None
+
+
+def save_project_controller(server, path: str, task: str) -> None:
+    task = thread_id(task)
+    timestamp = server.now_iso()
+    with server.connect() as conn:
+        conn.execute("""INSERT INTO desktop_project_controllers
+            (project_key,project_path,controller_thread_id,created_at,updated_at)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(project_key) DO UPDATE SET project_path=excluded.project_path,
+              controller_thread_id=excluded.controller_thread_id,updated_at=excluded.updated_at""",
+            (project_key(path), path, task, timestamp, timestamp))
+        conn.commit()
+
+
+def create_task(server, source_chat_id: int, data: dict, progress=None) -> dict:
+    source = require_chat(server, source_chat_id)
+    prompt = str(data.get("text") or "").strip()
+    if not prompt:
+        raise ValueError("Enter the first message for the new task")
+    if len(prompt.encode()) > server.MAX_CODEX_PROMPT_BYTES:
+        raise ValueError("Prompt exceeds size limit")
+    if server.parse_id_list(data.get("attachment_ids")):
+        raise ValueError("Attach files after the new task has been created")
+    operation_id = str(data.get("operation_id") or "")
+    if not UUID_PATTERN.fullmatch(operation_id):
+        raise ValueError("A unique operation_id is required")
+    fingerprint = hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    with server.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        old = conn.execute("SELECT * FROM desktop_actions WHERE operation_id=?",(operation_id,)).fetchone()
+        if old:
+            if old["chat_id"] != source_chat_id or old["action"] != "create" or old["fingerprint"] != fingerprint:
+                raise ValueError("operation_id was already used for another action")
+            if old["status"] == "complete":
+                return json.loads(old["result"])
+            raise ValueError("Previous creation is pending or uncertain; inspect the Desktop task before retrying.")
+        conn.execute("INSERT INTO desktop_actions VALUES (?,?,?,?,?,?,?)",
+                     (operation_id,source_chat_id,"create",fingerprint,"pending",None,server.now_iso()))
+        conn.commit()
+    path = source["repo_path"]
+    outgoing = dict(data)
+    outgoing.update(text=prompt, controllerThreadId=project_controller(server,path))
+    def report(update):
+        if isinstance(update,dict) and update.get("controllerThreadId"):
+            save_project_controller(server,path,update["controllerThreadId"])
+        if progress:
+            progress(update)
+    try:
+        result = BRIDGE.call(server.load_config(),"create",source["codex_session_id"],outgoing,
+                             progress=report,timeout=600)
+        save_project_controller(server,path,result["controllerThreadId"])
+        task = thread_id(result["threadId"])
+        state_result = result["state"]
+        with server.connect() as conn:
+            conn.execute("""INSERT OR IGNORE INTO codex_chats
+                (created_at,updated_at,title,repo_path,codex_session_id,status,backend,host_id)
+                VALUES (?,?,?,?,?,?,'desktop','local')""",
+                (server.now_iso(),server.now_iso(),state_result["title"],state_result["cwd"],task,
+                 state_result["status"]))
+            chat_id = conn.execute("""SELECT id FROM codex_chats
+                WHERE backend='desktop' AND host_id='local' AND codex_session_id=?""",(task,)).fetchone()[0]
+            response={"chat_id":chat_id,"state":state_result}
+            conn.execute("UPDATE desktop_actions SET status='complete',result=? WHERE operation_id=?",
+                         (json.dumps(response),operation_id))
+            conn.commit()
+        prepare_state_images(server,chat_id,state_result)
+        return response
+    except Exception:
+        with server.connect() as conn:
+            conn.execute("UPDATE desktop_actions SET status='uncertain' WHERE operation_id=?",(operation_id,))
+            conn.commit()
+        raise
+
+
+def create_view(job):
+    view={"create_id":job["create_id"],"status":job["status"],"stage":job["stage"],
+          "elapsed_seconds":round(time.monotonic()-job["started"],1)}
+    if job["status"]=="complete":
+        view["result"]=job["result"]
+    elif job["status"]=="error":
+        view["error"]=job["error"]
+    return view
+
+
+def cleanup_creates():
+    cutoff=time.monotonic()-CREATE_TTL_SECONDS
+    for create_id,job in list(CREATE_JOBS.items()):
+        if job["status"] in {"complete","error"} and job["finished"]<cutoff:
+            del CREATE_JOBS[create_id]
+
+
+def start_create(server, source_chat_id: int, data: dict, prompt: str) -> dict:
+    require_chat(server,source_chat_id)
+    create_id=str(uuid.uuid4())
+    job={"create_id":create_id,"status":"creating","stage":"queued",
+         "started":time.monotonic(),"finished":0.0}
+    with CREATE_JOBS_LOCK:
+        cleanup_creates();CREATE_JOBS[create_id]=job
+    def update_progress(update):
+        with CREATE_JOBS_LOCK:
+            job["stage"]=str((update or {}).get("stage") or job["stage"])
+    def run():
+        try:
+            result=create_task(server,source_chat_id,{**data,"text":prompt},progress=update_progress)
+            with CREATE_JOBS_LOCK:
+                job.update(status="complete",stage="complete",result=result,finished=time.monotonic())
+        except Exception as exc:
+            with CREATE_JOBS_LOCK:
+                job.update(status="error",stage="error",error=server.redact_secrets(str(exc)),
+                           finished=time.monotonic())
+    threading.Thread(target=run,name=f"desktop-create-{create_id[:8]}",daemon=True).start()
+    with CREATE_JOBS_LOCK:
+        return create_view(job)
+
+
+def create_status(data):
+    create_id=str(data.get("create_id") or "")
+    if not UUID_PATTERN.fullmatch(create_id):
+        raise ValueError("A valid create_id is required")
+    with CREATE_JOBS_LOCK:
+        cleanup_creates();job=CREATE_JOBS.get(create_id)
+        if not job:
+            raise ValueError("Creation request expired or was not found")
+        return create_view(job)
+
 def list_chats(server):
     with server.connect() as conn:
         chats=[dict(row) for row in conn.execute(
@@ -440,6 +587,8 @@ def dispatch(server, action, data):
         return start_load(server, data)
     if action == "load/status":
         return load_status(data)
+    if action == "create/status":
+        return create_status(data)
     if action == "link":
         return link(server,str(data.get("thread") or ""))
     chat_id = int(data.get("chat_id") or 0)
@@ -450,10 +599,16 @@ def dispatch(server, action, data):
         return mutate(server,chat_id,action,data)
     if action == "prompt/finish":
         # Chunk uploads use the existing transport; only the final dispatch differs.
+        outcome = {}
         def submit(target, prompt, attachments):
             if target != chat_id:
                 raise ValueError("Prompt belongs to another task")
-            mutate(server,chat_id,"send",{**data,"text":prompt,"attachment_ids":attachments})
+            payload={**data,"text":prompt,"attachment_ids":attachments}
+            if data.get("create"):
+                outcome.update(start_create(server,chat_id,payload,prompt))
+            else:
+                mutate(server,chat_id,"send",payload)
+                outcome.update(ok=True)
         server.finish_codex_prompt_upload(int(data["upload_id"]), submit=submit)
-        return {"ok":True}
+        return outcome
     raise ValueError("Unknown desktop action")

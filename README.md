@@ -125,10 +125,12 @@ Company browser -> HTTPS tunnel -> Node gateway
                                           -> existing task and runtime
 ```
 
-Open the target task in the Windows app, then paste its
+Open an existing task in the Windows app, then paste its
 `codex://threads/<task-id>` link or UUID into the Desktop page. Only explicitly
-linked tasks are listed; connecting the same task again reuses its record.
-No separate Codex task or app-server is created.
+linked tasks are listed; connecting the same task again reuses its record. To
+create another task, expand a project group and press **＋**, enter the first
+prompt, optionally select its model and effort, then send. The new native Desktop
+task is created inside that saved project and connected automatically.
 
 The app retains task ownership, history, model, permissions and Dynamic runtime.
 Tunnel Chat does not copy credentials, switch Codex homes or modify app settings.
@@ -136,6 +138,14 @@ SQLite migration tags old chats as `backend=cli-wsl`; desktop records store
 `backend=desktop`, `host_id=local` and the exact app task ID. Native Windows cwd
 values remain metadata and are never resolved as Linux paths.
 
+- The first remote creation in a project bootstraps one dedicated native
+  **Tunnel Chat · project** controller task. Later creations reuse it, keeping
+  internal create requests out of ordinary task histories. Creation runs as a
+  background job and reports controller, creation and linking progress so a long
+  Desktop operation does not hold the public HTTPS request open.
+- The first prompt uses the same resumable chunk transport as ordinary turns, so
+  company proxies never receive it as one large query parameter. Attach files
+  after the new task has been connected.
 - Read messages and command/file activity. The bridge consumes IPC snapshots and
   patches; the browser refreshes its projection every 1.5 seconds. Normal polling
   does not reload history or call a model.
@@ -217,8 +227,7 @@ they do not submit a live model turn.
 Desktop mode supports local Codex tasks, not ordinary ChatGPT cloud conversations
 or remote hosts. The page displays the most recent 600 message/activity entries;
 reasoning details and arbitrary configuration are not exported. Use the desktop
-app for task creation, runtime changes, request types the page cannot render and
-older history.
+app for runtime changes, request types the page cannot render and older history.
 
 ## WSL CLI and manual queue
 

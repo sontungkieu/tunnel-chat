@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict');
 const net=require('node:net');
 const {test}=require('node:test');
-const {Decoder,frame,applyPatches,projectState,taskSummary,validateApprovalDecision,normalizeUserInputResponse,DesktopClient}=require('../desktop_ipc.cjs');
+const {Decoder,frame,applyPatches,projectState,taskSummary,createdThreadIdFromTurn,validateApprovalDecision,normalizeUserInputResponse,DesktopClient}=require('../desktop_ipc.cjs');
 const ID='11111111-1111-4111-8111-111111111111';
 const sample=()=>({id:ID,title:'test',cwd:'D:\\work',latestModel:'test-model',latestReasoningEffort:'high',threadRuntimeStatus:{type:'idle'},
   turns:[{turnId:'turn-1',status:'completed',params:{input:[{type:'text',text:'hello'}]},
@@ -66,6 +66,27 @@ test('question replies are projected as readable text without internal envelopes
     'Đã trả lời câu hỏi\n\nCâu hỏi: Cho phép commit rồi push?\n\nTrả lời: Cho phép riêng lần này',images:[]}]);
   assert.ok(!JSON.stringify(users).includes('questionItemId'));
   assert.ok(!JSON.stringify(users).includes('send_user_message_question_reply'));
+});
+test('created task IDs are read from the completed Desktop dynamic tool result',()=>{
+  const child='22222222-2222-4222-8222-222222222222';
+  const turn={items:[{type:'dynamicToolCall',tool:'create_thread',success:true,status:'completed',
+    contentItems:[{type:'inputText',text:JSON.stringify({threadId:child,hostId:'local'})}]}]};
+  assert.equal(createdThreadIdFromTurn(turn),child);
+  assert.equal(createdThreadIdFromTurn({items:[{type:'agentMessage',
+    text:'codex://threads/'+child,phase:'final'}]}),child);
+  assert.equal(createdThreadIdFromTurn({items:[{type:'dynamicToolCall',tool:'create_thread',
+    success:false,contentItems:[{type:'inputText',text:JSON.stringify({threadId:child})}]}]}),null);
+});
+test('internal task-creation turns stay out of the projected web history',()=>{
+  const s=sample();
+  s.turns.push({turnId:'control',status:'completed',
+    params:{input:[{type:'text',text:'<tunnel_chat_control_create>\nprivate control\n</tunnel_chat_control_create>'}]},
+    items:[{type:'agentMessage',id:'internal',text:'codex://threads/22222222-2222-4222-8222-222222222222'}]});
+  const view=projectState(s,2);
+  assert.ok(!JSON.stringify(view.messages).includes('private control'));
+  assert.ok(!JSON.stringify(view.messages).includes('22222222'));
+  assert.equal(view.latestTurnId,'turn-1');
+  assert.equal(taskSummary(s,2).latestTurnId,'turn-1');
 });
 test('image-only user messages remain visible',()=>{
   const s=sample(),image='C:\\Temp\\diagram.png';
