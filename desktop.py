@@ -226,6 +226,8 @@ def init_schema(conn):
         conn.execute("ALTER TABLE codex_chats ADD COLUMN host_id TEXT NOT NULL DEFAULT 'local'")
     if "hidden" not in columns:
         conn.execute("ALTER TABLE codex_chats ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
+    if "custom_title" not in columns:
+        conn.execute("ALTER TABLE codex_chats ADD COLUMN custom_title TEXT")
     conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS desktop_task_owner
                  ON codex_chats(host_id, codex_session_id) WHERE backend = 'desktop'""")
     conn.execute("""CREATE TABLE IF NOT EXISTS desktop_actions (
@@ -253,13 +255,16 @@ def state(server, chat_id, refresh=False, progress=None, since_revision=None):
     if result.get("unchanged") is True:
         return result
     prepare_state_images(server, chat_id, result)
+    native_title = result["title"]
     # Native paths are metadata here; never resolve a Windows cwd as a Linux path.
     with server.connect() as conn:
         conn.execute("""UPDATE codex_chats SET title=?,repo_path=?,status=?,activity=?,updated_at=?
                       WHERE id=? AND backend='desktop'""",
-                     (result["title"], result["cwd"], result["status"], result.get("activity"),
+                     (native_title, result["cwd"], result["status"], result.get("activity"),
                       server.now_iso(), chat_id))
         conn.commit()
+    if chat["custom_title"]:
+        result["title"] = str(chat["custom_title"])
     return result
 
 
@@ -574,6 +579,20 @@ def unlink(server, chat_id: int) -> dict:
     return {"ok":True}
 
 
+def rename(server, chat_id: int, value: object) -> dict:
+    require_chat(server, chat_id)
+    title = " ".join(str(value or "").split())
+    if not title:
+        raise ValueError("Enter a task name")
+    if len(title) > 160:
+        raise ValueError("Task name is limited to 160 characters")
+    with server.connect() as conn:
+        conn.execute("UPDATE codex_chats SET custom_title=?,updated_at=? WHERE id=? AND backend='desktop'",
+                     (title, server.now_iso(), chat_id))
+        conn.commit()
+    return {"ok": True, "title": title}
+
+
 def list_chats(server):
     with server.connect() as conn:
         chats=[dict(row) for row in conn.execute(
@@ -587,6 +606,8 @@ def list_chats(server):
             live={}
     updates=[]
     for chat in chats:
+        if chat.get("custom_title"):
+            chat["title"] = str(chat["custom_title"])
         summary=live.get(chat["codex_session_id"]) if isinstance(live,dict) else None
         if not isinstance(summary,dict):
             chat["live"]=False
@@ -625,6 +646,8 @@ def dispatch(server, action, data):
                      since_revision=data.get("since_revision"))
     if action == "unlink":
         return unlink(server,chat_id)
+    if action == "rename":
+        return rename(server,chat_id,data.get("title"))
     if action in {"send","cancel","reply"}:
         return mutate(server,chat_id,action,data)
     if action == "prompt/finish":

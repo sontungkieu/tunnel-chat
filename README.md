@@ -173,6 +173,9 @@ Press **＋ Project** to connect the first task for another project: enter the e
 Windows path of a project already saved in Codex Desktop, then compose its first
 prompt. Codex Desktop currently exposes task creation inside saved projects; add a
 brand-new folder to the Desktop app first so it appears in its project list.
+The task menu can set a Tunnel Chat display name without changing the native
+Desktop title. The compact composer keeps attachment, send mode, model and effort
+on one row when space permits, then wraps them into touch-sized rows on phones.
 
 The app retains task ownership, history, model, permissions and Dynamic runtime.
 Tunnel Chat does not copy credentials, switch Codex homes or modify app settings.

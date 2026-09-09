@@ -49,6 +49,7 @@ class DesktopTests(unittest.TestCase):
         desktop.init_schema(conn)
         self.assertEqual(conn.execute("SELECT codex_session_id,backend,host_id,hidden FROM codex_chats").fetchone(),
                          ("old-session","cli-wsl","local",0))
+        self.assertIn("custom_title",{row[1] for row in conn.execute("PRAGMA table_info(codex_chats)")})
         conn.close()
 
     def test_desktop_never_runs_legacy_cli_or_process_cleanup(self):
@@ -83,6 +84,19 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(linked["chat_id"],chat)
         with server.connect() as conn:
             self.assertEqual(conn.execute("SELECT hidden FROM codex_chats WHERE id=?",(chat,)).fetchone()[0],0)
+
+    def test_tunnel_title_survives_native_state_refresh(self):
+        chat=self.chat();row=server.get_codex_chat(chat)
+        self.assertEqual(desktop.rename(server,chat,"  Remote   display name  "),
+                         {"ok":True,"title":"Remote display name"})
+        snapshot={"threadId":row["codex_session_id"],"title":"native title","cwd":r"D:\work",
+                  "status":"idle","messages":[]}
+        with mock.patch.object(desktop.BRIDGE,"call",return_value=snapshot):
+            state=desktop.state(server,chat)
+        self.assertEqual(state["title"],"Remote display name")
+        self.assertEqual(server.get_codex_chat(chat)["title"],"native title")
+        with mock.patch.object(desktop.BRIDGE,"call",return_value={}):
+            self.assertEqual(desktop.list_chats(server)[0]["title"],"Remote display name")
 
     def test_list_merges_cached_live_summaries_without_loading_history(self):
         chat=self.chat();row=server.get_codex_chat(chat);turn=str(uuid.uuid4())
@@ -331,6 +345,9 @@ class DesktopTests(unittest.TestCase):
             self.assertIn(b'id="chatLoaderProgress"', get("/codex")[1])
             self.assertIn(b'id="newProject"', get("/codex")[1])
             self.assertIn(b'id="projectDialog"', get("/codex")[1])
+            self.assertIn(b'data-action="rename"', get("/codex")[1])
+            self.assertIn(b'<label class="file-button" title=', get("/codex")[1])
+            self.assertIn(b'<span class="sr-only">', get("/codex")[1])
             self.assertEqual(get("/static/desktop.js")[0],200)
             self.assertEqual(get("/static/rich-text.js")[0],200)
             self.assertEqual(get("/static/selection-quote.js")[0],200)

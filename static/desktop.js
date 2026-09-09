@@ -673,6 +673,14 @@ $("taskContextMenu").onclick=async event=>{
     if(action==="open"){location.assign(taskDeepLink(chat));return;}
     if(action==="copy-link"){await copyText(taskDeepLink(chat),"deeplink");return;}
     if(action==="copy-id"){await copyText(chat.codex_session_id,"task ID");return;}
+    if(action==="rename"){
+      const value=prompt("Tên task trong Tunnel Chat",chat.title);
+      if(value===null || !value.trim())return;
+      setBusy(true);const renamed=await rpc("rename",{chat_id:chat.id,title:value.trim()});
+      chat.title=renamed.title;
+      if(Number(chat.id)===active){if(snapshot)snapshot.title=renamed.title;$("title").textContent=renamed.title;}
+      await list();notice("Đã đổi tên task trong Tunnel Chat.");return;
+    }
     if(action==="new"){startProjectTask(group);return;}
     if(action==="reconnect"){await selectChat(chat,true);return;}
     if(action==="unlink"){

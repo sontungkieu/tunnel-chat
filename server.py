@@ -988,7 +988,8 @@ def get_codex_chat(chat_id: int) -> sqlite3.Row | None:
         return conn.execute(
             """
             SELECT id, created_at, updated_at, title, repo_path, codex_session_id,
-                   status, running_pid, process_group, activity, last_error, backend, host_id
+                   status, running_pid, process_group, activity, last_error, backend, host_id,
+                   custom_title
             FROM codex_chats
             WHERE id = ?
             """,
@@ -1001,7 +1002,8 @@ def list_codex_chats() -> list[dict[str, object]]:
         rows = conn.execute(
             """
             SELECT id, created_at, updated_at, title, repo_path, codex_session_id,
-                   status, running_pid, process_group, activity, last_error, backend, host_id
+                   status, running_pid, process_group, activity, last_error, backend, host_id,
+                   custom_title
             FROM codex_chats
             WHERE backend = 'cli-wsl'
             ORDER BY updated_at DESC, id DESC

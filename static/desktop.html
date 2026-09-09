@@ -73,7 +73,7 @@
         </div>
       </div>
       <div class="header-actions">
-        <details id="activityPanel" class="activity-panel" open>
+        <details id="activityPanel" class="activity-panel">
           <summary><span class="status-dot" aria-hidden="true"></span><span id="status" aria-live="polite">Chưa kết nối</span><span class="chevron" aria-hidden="true"></span></summary>
           <p id="activityDetail" class="muted small">Kết nối một task để theo dõi hoạt động.</p>
         </details>
@@ -109,13 +109,13 @@
         <label for="prompt" class="sr-only">Tin nhắn</label>
         <textarea id="prompt" rows="3" placeholder="Gửi tin nhắn tới task… Ctrl+Enter để gửi"></textarea>
         <div id="filesLabel" class="muted small"></div>
-        <div class="generation-controls" aria-label="Cấu hình lượt mới">
-          <label><span>Model</span><select id="modelSelect" aria-label="Model cho lượt mới"></select></label>
-          <label><span>Effort</span><select id="effortSelect" aria-label="Reasoning effort cho lượt mới"></select></label>
-        </div>
         <footer>
-          <label class="file-button"><span aria-hidden="true">＋</span> Đính kèm<input id="files" type="file" multiple></label>
+          <label class="file-button" title="Đính kèm file"><span aria-hidden="true">＋</span><span class="sr-only">Đính kèm file</span><input id="files" type="file" multiple></label>
           <select id="mode" aria-label="Cách gửi"><option value="start">Lượt mới</option><option value="steer">Chỉ dẫn cho lượt đang chạy</option></select>
+          <div class="generation-controls" aria-label="Cấu hình lượt mới">
+            <label><span>Model</span><select id="modelSelect" aria-label="Model cho lượt mới"></select></label>
+            <label><span>Effort</span><select id="effortSelect" aria-label="Reasoning effort cho lượt mới"></select></label>
+          </div>
           <span class="composer-spacer"></span>
           <button type="button" id="stop" class="danger" disabled>Dừng lượt</button>
           <button id="send" disabled>Gửi <span aria-hidden="true">↑</span></button>
@@ -127,6 +127,7 @@
     <button type="button" role="menuitem" data-action="open">Mở trong Codex Desktop</button>
     <button type="button" role="menuitem" data-action="copy-link">Sao chép deeplink</button>
     <button type="button" role="menuitem" data-action="copy-id">Sao chép task ID</button>
+    <button type="button" role="menuitem" data-action="rename">Đổi tên trong Tunnel Chat</button>
     <hr>
     <button type="button" role="menuitem" data-action="new">Task mới trong project</button>
     <button type="button" role="menuitem" data-action="reconnect">Kết nối lại</button>
