@@ -144,8 +144,10 @@ guide for details.
 maps only `D:\dev\codex\vai` on the personal Windows machine. From a company
 computer or phone you can select multiple local files and upload them into that
 directory, browse its folders, or enter a relative/full Windows path inside the
-root and download a file to the current device. Uploads use the same resumable
-small-chunk transport used for long prompts. Existing files are never overwritten;
+root and download a file to the current device. Large uploads use resumable
+binary-v2: 8 MiB chunks, up to 8 bounded adaptive lanes, per-chunk SHA-256,
+disk-backed staging, and atomic publish. The existing JSON/base64 transport
+remains as a fallback. Existing files are never overwritten;
 a numeric suffix is added on name collisions. Parent traversal, paths outside the
 configured root, and symbolic links are rejected. Clipboard notes on the same
 page accept pasted text, keep a scrollable preview list, and support expand,
@@ -153,8 +155,9 @@ copy, `.txt` download, and individual deletion. Long notes use the same small
 resumable chunks; list refreshes return only previews and fetch a full note on
 demand.
 
-Selected uploads are first saved as persistent browser jobs in IndexedDB. A
-same-origin service worker sends and resumes those jobs, so you can move between
+Selected uploads are saved as persistent browser jobs in IndexedDB. Large-file
+jobs use a File System Access handle instead of copying a multi-gigabyte Blob;
+a same-origin service worker sends and resumes those jobs, so you can move between
 `/files`, `/codex`, and `/chat/` while an upload is running. Every page shows the
 same compact status indicator; `/files` provides retry, cancel, remove, and queue
 cleanup controls. The file blob is released when a job completes. The access
@@ -162,6 +165,11 @@ token is stored in same-origin browser storage so `/files`, `/codex`, new tabs,
 and return navigation share one authenticated session until **Xóa token** is
 pressed. It remains separate from upload job data and is not written to IndexedDB.
 The public tunnel already uses HTTPS, which is required for service workers.
+For the 10 GiB profile use `TRANSFER_PROTOCOL=auto`,
+`BINARY_UPLOAD_CHUNK_BYTES=8388608`, `UPLOAD_CONCURRENCY=4`,
+`UPLOAD_CONCURRENCY_MAX=8`, `FILE_TRANSFER_MAX_BYTES=10737418240`, and
+`FILE_TRANSFER_STAGING_MAX_BYTES=21474836480`. Traffic remains on the existing
+HTTPS tunnel; this does not bypass proxy controls or Cloudflare limits.
 
 ```bash
 ./bin/url files

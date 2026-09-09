@@ -2,7 +2,7 @@
 
 const DB_NAME = "tunnel-chat-transfer-v1";
 const STORE = "jobs";
-let runtime = {token: "", chunkBytes: 2048, concurrency: 3, retryLimit: 4};
+let runtime = {token: "", chunkBytes: 2048, concurrency: 3, concurrencyMax: 8, retryLimit: 4, transferProtocol: "legacy"};
 let processing = null;
 
 function openDatabase() {
@@ -112,7 +112,133 @@ async function runLimited(indexes, concurrency, task) {
   if (firstError) throw firstError;
 }
 
-async function uploadJob(job, resetAttempts = 0) {
+function binaryQuery(path, values) {
+  const query = new URLSearchParams(values);
+  return `/f/${path}?${query.toString()}`;
+}
+
+async function binaryRequest(path, init = {}, attempts = runtime.retryLimit) {
+  if (!runtime.token) throw new Error("waiting-auth");
+  let lastError;
+  for (let attempt = 1; attempt <= Math.max(1, attempts); attempt += 1) {
+    try {
+      const response = await fetch(path, {
+        cache: "no-store", ...init,
+        headers: {"x-chat-token": runtime.token, ...(init.headers || {})},
+      });
+      if (response.ok) return await response.json();
+      const message = (await response.json().catch(() => null))?.error || `${response.status} ${response.statusText}`;
+      const error = new Error(message); error.status = response.status;
+      if (![408, 425, 429].includes(response.status) && response.status < 500) throw error;
+      lastError = error;
+    } catch (error) {
+      lastError = error;
+      if (error.status && error.status < 500 && ![408, 425, 429].includes(error.status)) throw error;
+    }
+    if (attempt < attempts) await wait(Math.min(5000, 300 * (2 ** (attempt - 1)) + Math.random() * 150));
+  }
+  throw lastError || new Error("request failed");
+}
+
+async function getBinarySource(job) {
+  if (job.blob) return job.blob;
+  if (!job.handle) throw new Error("waiting-for-file");
+  if (job.handle.queryPermission && await job.handle.queryPermission({mode: "read"}) !== "granted") throw new Error("waiting-for-file");
+  const file = await job.handle.getFile();
+  if (file.name !== job.name || file.size !== job.size || (job.lastModified && file.lastModified !== job.lastModified)) {
+    throw new Error("waiting-for-file");
+  }
+  return file;
+}
+
+async function digestChunk(buffer) {
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function uploadBinaryJob(job) {
+  const source = await getBinarySource(job);
+  const chunkBytes = Number(job.chunkBytes || runtime.chunkBytes || 8 * 1024 * 1024);
+  const totalChunks = Math.max(1, Math.ceil(job.size / chunkBytes));
+  try {
+    if (!job.uploadId || job.protocol !== "binary-v2") {
+      const started = await binaryRequest("/f/upload/start-binary", {
+        method: "POST", headers: {"content-type": "application/json"},
+        body: JSON.stringify({directory: job.directory, filename: job.name, mime_type: job.mimeType, size: job.size}),
+      }, 1);
+      job.uploadId = Number(started.upload_id); job.nonce = String(started.nonce);
+      job.protocol = "binary-v2"; job.chunkBytes = Number(started.chunk_bytes || chunkBytes);
+      job.totalChunks = Number(started.total_chunks || totalChunks);
+      await putJob(job);
+    }
+    const status = await binaryRequest(binaryQuery("upload/status-binary", {upload_id: job.uploadId, nonce: job.nonce}));
+    const missing = Array.isArray(status.missing) ? status.missing.map(Number) : [];
+    const startedAt = Number(job.startedAt || Date.now());
+    let completedBytes = Number(status.received_bytes || 0);
+    let laneCount = Math.max(1, Math.min(Number(runtime.concurrency || 4), Number(runtime.concurrencyMax || 8)));
+    await update(job, {state: "uploading", error: "", protocol: "binary-v2", progress: job.size ? completedBytes / job.size * 100 : 0,
+      receivedBytes: completedBytes, laneCount, detail: "Đang truyền binary-v2"});
+    let cursor = 0;
+    let firstError = null;
+    async function lane() {
+      while (!firstError) {
+        const position = cursor++;
+        if (position >= missing.length) return;
+        const chunkIndex = missing[position];
+        try {
+          const start = chunkIndex * Number(job.chunkBytes);
+          const end = Math.min(job.size, start + Number(job.chunkBytes));
+          const buffer = await source.slice(start, end).arrayBuffer();
+          const hash = await digestChunk(buffer);
+          await binaryRequest(binaryQuery("upload/chunk-binary", {
+            upload_id: job.uploadId, nonce: job.nonce, chunk_index: chunkIndex,
+          }), {method: "PUT", body: buffer, headers: {
+            "content-type": "application/octet-stream", "content-range": `bytes ${start}-${end - 1}/${job.size}`,
+            "x-chunk-sha256": hash,
+          }});
+          completedBytes += buffer.byteLength;
+          const elapsed = Math.max(0.001, (Date.now() - startedAt) / 1000);
+          const speed = completedBytes / elapsed;
+          await update(job, {progress: job.size ? completedBytes / job.size * 100 : 100, receivedBytes: completedBytes,
+            speedBytesPerSecond: speed, etaSeconds: speed ? Math.max(0, (job.size - completedBytes) / speed) : null,
+            laneCount, detail: `${laneCount} luồng · ${Math.round(completedBytes / Math.max(1, job.size) * 100)}%`});
+        } catch (error) { firstError = error; }
+      }
+    }
+    await Promise.all(Array.from({length: laneCount}, lane));
+    if (firstError) throw firstError;
+    await update(job, {state: "finishing", progress: 100, detail: "Đang kiểm tra và hoàn tất trên máy cá nhân"});
+    const finished = await binaryRequest("/f/upload/finish-binary", {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify({upload_id: job.uploadId, nonce: job.nonce, sha256: "server"}),
+    }, 1);
+    await update(job, {state: "complete", progress: 100, receivedBytes: job.size, result: finished.file,
+      detail: finished.file?.path || job.name, blob: null, handle: null});
+    return true;
+  } catch (error) {
+    if (error.status === 404 || error.status === 405 || /waiting-for-file/.test(error.message)) {
+      if (error.status === 404 || error.status === 405) { job.protocol = "legacy"; await putJob(job); return await uploadLegacyJob(job); }
+      await update(job, {state: "waiting-file", detail: "Chọn lại đúng file để tiếp tục", error: ""});
+      return false;
+    }
+    if (error.message === "cancelled") return true;
+    if (error.message === "waiting-auth" || error.status === 401) {
+      runtime.token = ""; await update(job, {state: "waiting-auth", detail: "Mở lại trang đã xác thực để tiếp tục"}); return false;
+    }
+    await update(job, {state: "failed", error: String(error.message || error), detail: "Upload gặp lỗi"});
+    return true;
+  }
+}
+
+async function uploadJob(job) {
+  if (job.kind === "file" && runtime.transferProtocol === "binary-v2" && job.protocol !== "legacy") {
+    await update(job, {state: "uploading", error: "", detail: "Đang chuẩn bị upload binary-v2"});
+    return await uploadBinaryJob(job);
+  }
+  return await uploadLegacyJob(job);
+}
+
+async function uploadLegacyJob(job, resetAttempts = 0) {
   if (!runtime.token) { await update(job, {state: "waiting-auth", detail: "Đang chờ access token"}); return false; }
   try {
     await update(job, {state: "uploading", error: "", detail: "Đang chuẩn bị upload"});

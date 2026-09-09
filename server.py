@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import html
+import hashlib
 import json
 import mimetypes
 import os
@@ -27,6 +28,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import desktop
+import transfer_protocol
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -51,6 +53,13 @@ DEFAULT_FILE_TRANSFER_ROOT = r"D:\dev\codex\vai"
 DEFAULT_FILE_TRANSFER_MAX_BYTES = 32 * 1024 * 1024
 MIN_FILE_TRANSFER_MAX_BYTES = 1024 * 1024
 MAX_FILE_TRANSFER_MAX_BYTES = 128 * 1024 * 1024
+DEFAULT_BINARY_FILE_TRANSFER_MAX_BYTES = 10 * 1024 * 1024 * 1024
+MAX_BINARY_FILE_TRANSFER_MAX_BYTES = 10 * 1024 * 1024 * 1024
+DEFAULT_FILE_TRANSFER_STAGING_MAX_BYTES = 20 * 1024 * 1024 * 1024
+MIN_BINARY_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
+MAX_BINARY_UPLOAD_CHUNK_BYTES = 16 * 1024 * 1024
+DEFAULT_BINARY_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+DEFAULT_UPLOAD_CONCURRENCY_MAX = 8
 MAX_CLIPBOARD_NOTE_BYTES = 4 * 1024 * 1024
 MAX_QUEUE_UPLOAD_BYTES = 4 * 1024 * 1024
 MAX_CODEX_ATTACHMENT_BYTES = 8 * 1024 * 1024
@@ -70,6 +79,16 @@ CODEX_RUNNERS_LOCK = threading.Lock()
 CODEX_CANCELLED: set[int] = set()
 EVENT_CONDITION = threading.Condition()
 EVENT_REVISION = 0
+
+
+class ClosingConnection(sqlite3.Connection):
+    """Close SQLite handles at the end of ``with connect()`` on Windows too."""
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
 
 
 def now_iso() -> str:
@@ -108,11 +127,15 @@ def load_config() -> dict[str, str]:
         "desktop_node": merged.get("DESKTOP_NODE", ""),
         "desktop_staging_root": merged.get("DESKTOP_STAGING_ROOT", r"D:\dev\codex\tunnel-chat\attachments"),
         "upload_chunk_bytes": merged.get("UPLOAD_CHUNK_BYTES", str(DEFAULT_UPLOAD_CHUNK_BYTES)),
+        "binary_upload_chunk_bytes": merged.get("BINARY_UPLOAD_CHUNK_BYTES", str(DEFAULT_BINARY_UPLOAD_CHUNK_BYTES)),
         "upload_concurrency": merged.get("UPLOAD_CONCURRENCY", str(DEFAULT_UPLOAD_CONCURRENCY)),
         "upload_retry_limit": merged.get("UPLOAD_RETRY_LIMIT", str(DEFAULT_UPLOAD_RETRY_LIMIT)),
         "upload_ttl_seconds": merged.get("UPLOAD_TTL_SECONDS", str(DEFAULT_UPLOAD_TTL_SECONDS)),
         "file_transfer_root": merged.get("FILE_TRANSFER_ROOT", DEFAULT_FILE_TRANSFER_ROOT),
         "file_transfer_max_bytes": merged.get("FILE_TRANSFER_MAX_BYTES", str(DEFAULT_FILE_TRANSFER_MAX_BYTES)),
+        "transfer_protocol": merged.get("TRANSFER_PROTOCOL", "auto"),
+        "upload_concurrency_max": merged.get("UPLOAD_CONCURRENCY_MAX", str(DEFAULT_UPLOAD_CONCURRENCY_MAX)),
+        "file_transfer_staging_max_bytes": merged.get("FILE_TRANSFER_STAGING_MAX_BYTES", str(DEFAULT_FILE_TRANSFER_STAGING_MAX_BYTES)),
     }
 
 
@@ -157,6 +180,39 @@ def file_transfer_max_bytes() -> int:
         MIN_FILE_TRANSFER_MAX_BYTES,
         MAX_FILE_TRANSFER_MAX_BYTES,
     )
+
+
+def binary_file_transfer_max_bytes() -> int:
+    try:
+        value = int(load_config().get("file_transfer_max_bytes") or DEFAULT_BINARY_FILE_TRANSFER_MAX_BYTES)
+    except ValueError:
+        value = DEFAULT_BINARY_FILE_TRANSFER_MAX_BYTES
+    return max(MIN_FILE_TRANSFER_MAX_BYTES, min(MAX_BINARY_FILE_TRANSFER_MAX_BYTES, value))
+
+
+def binary_upload_chunk_bytes() -> int:
+    return bounded_config_int(
+        "binary_upload_chunk_bytes", DEFAULT_BINARY_UPLOAD_CHUNK_BYTES,
+        MIN_BINARY_UPLOAD_CHUNK_BYTES, MAX_BINARY_UPLOAD_CHUNK_BYTES,
+    )
+
+
+def upload_concurrency_max() -> int:
+    return bounded_config_int(
+        "upload_concurrency_max", DEFAULT_UPLOAD_CONCURRENCY_MAX,
+        MIN_UPLOAD_CONCURRENCY, DEFAULT_UPLOAD_CONCURRENCY_MAX,
+    )
+
+
+def file_transfer_staging_max_bytes() -> int:
+    return bounded_config_int(
+        "file_transfer_staging_max_bytes", DEFAULT_FILE_TRANSFER_STAGING_MAX_BYTES,
+        DEFAULT_BINARY_UPLOAD_CHUNK_BYTES, 100 * 1024 * 1024 * 1024,
+    )
+
+
+def binary_transfer_enabled() -> bool:
+    return str(load_config().get("transfer_protocol") or "auto").strip().lower() in {"auto", "binary", "v2", "binary-v2"}
 
 
 def upload_ttl_seconds() -> int:
@@ -245,11 +301,15 @@ def ensure_env() -> None:
         f"CLOUDFLARED_BIN='{cloudflared}'\n"
         f"GATEWAY_NODE='{gateway_node}'\n"
         f"UPLOAD_CHUNK_BYTES={DEFAULT_UPLOAD_CHUNK_BYTES}\n"
+        f"BINARY_UPLOAD_CHUNK_BYTES={DEFAULT_BINARY_UPLOAD_CHUNK_BYTES}\n"
         f"UPLOAD_CONCURRENCY={DEFAULT_UPLOAD_CONCURRENCY}\n"
+        f"UPLOAD_CONCURRENCY_MAX={DEFAULT_UPLOAD_CONCURRENCY_MAX}\n"
         f"UPLOAD_RETRY_LIMIT={DEFAULT_UPLOAD_RETRY_LIMIT}\n"
         f"UPLOAD_TTL_SECONDS={DEFAULT_UPLOAD_TTL_SECONDS}\n"
+        "TRANSFER_PROTOCOL=auto\n"
         f"FILE_TRANSFER_ROOT='{DEFAULT_FILE_TRANSFER_ROOT}'\n"
-        f"FILE_TRANSFER_MAX_BYTES={DEFAULT_FILE_TRANSFER_MAX_BYTES}\n"
+        f"FILE_TRANSFER_MAX_BYTES={DEFAULT_BINARY_FILE_TRANSFER_MAX_BYTES}\n"
+        f"FILE_TRANSFER_STAGING_MAX_BYTES={DEFAULT_FILE_TRANSFER_STAGING_MAX_BYTES}\n"
         f"CODEX_BIN='{DEFAULT_CODEX_BIN}'\n"
         f"CODEX_REPOS='{os.pathsep.join(DEFAULT_CODEX_REPOS)}'\n"
         f"CODEX_HOME='{DEFAULT_CODEX_HOME}'\n"
@@ -266,7 +326,7 @@ def ensure_env() -> None:
 
 def connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn = sqlite3.connect(DB_PATH, timeout=10, factory=ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA journal_mode=WAL")
@@ -422,11 +482,40 @@ def connect() -> sqlite3.Connection:
         """
     )
     conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS file_upload_chunks (
+            """
+            CREATE TABLE IF NOT EXISTS file_upload_chunks (
             upload_id INTEGER NOT NULL,
             chunk_index INTEGER NOT NULL,
             body TEXT NOT NULL,
+            PRIMARY KEY (upload_id, chunk_index)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS file_binary_uploads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            relative_dir TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            chunk_size INTEGER NOT NULL,
+            total_chunks INTEGER NOT NULL,
+            nonce TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'uploading'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS file_binary_chunks (
+            upload_id INTEGER NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            size INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            stored_at TEXT NOT NULL,
             PRIMARY KEY (upload_id, chunk_index)
         )
         """
@@ -614,7 +703,19 @@ def cleanup_expired_uploads(ttl_seconds: int | None = None) -> dict[str, int]:
                 f"DELETE FROM {chunk_table} WHERE upload_id NOT IN (SELECT id FROM {session_table})"
             )
             removed[kind] = len(ids)
+        binary_rows = conn.execute(
+            "SELECT id FROM file_binary_uploads WHERE updated_at < ?", (cutoff,)
+        ).fetchall()
+        binary_ids = [int(row["id"]) for row in binary_rows]
+        if binary_ids:
+            placeholders = ",".join("?" for _ in binary_ids)
+            conn.execute(f"DELETE FROM file_binary_chunks WHERE upload_id IN ({placeholders})", binary_ids)
+            conn.execute(f"DELETE FROM file_binary_uploads WHERE id IN ({placeholders})", binary_ids)
+        conn.execute("DELETE FROM file_binary_chunks WHERE upload_id NOT IN (SELECT id FROM file_binary_uploads)")
         conn.commit()
+    for upload_id in binary_ids:
+        shutil.rmtree(file_transfer_root() / ".incoming" / str(upload_id), ignore_errors=True)
+    removed["binary"] = len(binary_ids)
     return removed
 
 
@@ -1303,6 +1404,170 @@ def finish_file_upload(upload_id: int) -> dict[str, object]:
     relative = target.relative_to(file_transfer_root()).as_posix()
     return {"path": relative, "name": target.name, "size": written,
             "mime_type": str(session["mime_type"])}
+
+
+def binary_staging_root(upload_id: int) -> Path:
+    root = file_transfer_root() / ".incoming" / str(int(upload_id))
+    root.parent.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _binary_session(upload_id: int, nonce: str) -> sqlite3.Row:
+    with connect() as conn:
+        session = conn.execute(
+            "SELECT * FROM file_binary_uploads WHERE id = ? AND nonce = ?",
+            (int(upload_id), str(nonce)),
+        ).fetchone()
+    if session is None:
+        raise ValueError(f"unknown binary upload #{upload_id}")
+    return session
+
+
+def create_binary_file_upload(relative_dir: str, filename: str, mime_type: str, size: int) -> dict[str, object]:
+    directory, normalized_dir = file_transfer_path(relative_dir)
+    if directory.exists() and not directory.is_dir():
+        raise ValueError("Upload destination is not a directory")
+    size = int(size)
+    if size < 0 or size > binary_file_transfer_max_bytes():
+        raise ValueError(f"file too large; limit is {binary_file_transfer_max_bytes() // 1024 // 1024} MB")
+    chunk_size = binary_upload_chunk_bytes()
+    total_chunks = max(1, (size + chunk_size - 1) // chunk_size)
+    if total_chunks > MAX_UPLOAD_CHUNKS:
+        raise ValueError("file has too many chunks")
+    nonce = secrets.token_urlsafe(24)
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO file_binary_uploads
+               (created_at, updated_at, relative_dir, filename, mime_type, size, chunk_size, total_chunks, nonce)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (now_iso(), now_iso(), normalized_dir, safe_filename(filename),
+             (mime_type or "application/octet-stream")[:120], size, chunk_size, total_chunks, nonce),
+        )
+        upload_id = int(cur.lastrowid)
+        conn.commit()
+    binary_staging_root(upload_id).mkdir(parents=True, exist_ok=True)
+    return {"upload_id": upload_id, "protocol": "binary-v2", "chunk_bytes": chunk_size,
+            "total_chunks": total_chunks, "nonce": nonce}
+
+
+def _binary_staged_bytes() -> int:
+    with connect() as conn:
+        row = conn.execute("SELECT COALESCE(SUM(size), 0) AS total FROM file_binary_chunks").fetchone()
+    return int(row["total"] if row else 0)
+
+
+def add_binary_file_upload_chunk(upload_id: int, nonce: str, chunk_index: int,
+                                 body: bytes, content_range: str, sha256: str) -> dict[str, object]:
+    session = _binary_session(upload_id, nonce)
+    meta = transfer_protocol.validate_chunk_metadata(
+        size=int(session["size"]), chunk_size=int(session["chunk_size"]),
+        total_chunks=int(session["total_chunks"]), chunk_index=int(chunk_index),
+        body_size=len(body), content_range=content_range, sha256=sha256,
+    )
+    actual_hash = hashlib.sha256(body).hexdigest()
+    if actual_hash != meta.sha256:
+        raise ValueError("chunk SHA-256 mismatch")
+    staging = binary_staging_root(upload_id)
+    staging.mkdir(parents=True, exist_ok=True)
+    final_path = transfer_protocol.chunk_path(staging, meta.chunk_index)
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT size, sha256 FROM file_binary_chunks WHERE upload_id = ? AND chunk_index = ?",
+            (upload_id, meta.chunk_index),
+        ).fetchone()
+        if existing is not None:
+            if int(existing["size"]) == len(body) and str(existing["sha256"]) == meta.sha256 and final_path.is_file():
+                return {"ok": True, "duplicate": True, "chunk_index": meta.chunk_index}
+            raise ValueError("conflicting duplicate chunk")
+        if _binary_staged_bytes() + len(body) > file_transfer_staging_max_bytes():
+            raise ValueError("upload staging disk quota exceeded")
+        temporary = staging / f"{meta.chunk_index}.tmp"
+        try:
+            with temporary.open("wb") as output:
+                output.write(body)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, final_path)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+        conn.execute(
+            "INSERT INTO file_binary_chunks(upload_id, chunk_index, size, sha256, stored_at) VALUES (?, ?, ?, ?, ?)",
+            (upload_id, meta.chunk_index, len(body), meta.sha256, now_iso()),
+        )
+        conn.execute("UPDATE file_binary_uploads SET updated_at = ? WHERE id = ?", (now_iso(), upload_id))
+        conn.commit()
+    return {"ok": True, "chunk_index": meta.chunk_index, "size": len(body)}
+
+
+def get_binary_file_upload_status(upload_id: int, nonce: str) -> dict[str, object]:
+    session = _binary_session(upload_id, nonce)
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT chunk_index, size FROM file_binary_chunks WHERE upload_id = ? ORDER BY chunk_index",
+            (upload_id,),
+        ).fetchall()
+    received = {int(row["chunk_index"]): int(row["size"]) for row in rows}
+    missing = [index for index in range(int(session["total_chunks"])) if index not in received]
+    return {"upload_id": int(upload_id), "protocol": "binary-v2", "chunk_bytes": int(session["chunk_size"]),
+            "total_chunks": int(session["total_chunks"]), "received_chunks": len(received),
+            "received_bytes": sum(received.values()), "missing_ranges": transfer_protocol.encode_missing_ranges(missing),
+            "missing": missing}
+
+
+def finish_binary_file_upload(upload_id: int, nonce: str, file_sha256: str) -> dict[str, object]:
+    session = _binary_session(upload_id, nonce)
+    requested_hash = str(file_sha256).lower()
+    if requested_hash != "server" and not re.fullmatch(r"[0-9a-f]{64}", requested_hash):
+        raise ValueError("invalid SHA-256")
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT chunk_index, size, sha256 FROM file_binary_chunks WHERE upload_id = ? ORDER BY chunk_index",
+            (upload_id,),
+        ).fetchall()
+    total_chunks = int(session["total_chunks"])
+    if len(rows) != total_chunks or [int(row["chunk_index"]) for row in rows] != list(range(total_chunks)):
+        raise ValueError(f"binary upload #{upload_id} is incomplete")
+    staging = binary_staging_root(upload_id)
+    directory, _ = file_transfer_path(str(session["relative_dir"]))
+    directory.mkdir(parents=True, exist_ok=True)
+    target = unique_transfer_path(directory, str(session["filename"]))
+    temporary_fd, temporary_name = tempfile.mkstemp(prefix=".tunnel-chat-", dir=directory)
+    os.close(temporary_fd)
+    temporary = Path(temporary_name)
+    digest = hashlib.sha256()
+    written = 0
+    try:
+        with temporary.open("wb") as output:
+            for row in rows:
+                chunk = transfer_protocol.chunk_path(staging, int(row["chunk_index"]))
+                if not chunk.is_file() or chunk.stat().st_size != int(row["size"]):
+                    raise ValueError("staged chunk is missing")
+                with chunk.open("rb") as source:
+                    while True:
+                        part = source.read(1024 * 1024)
+                        if not part:
+                            break
+                        digest.update(part)
+                        output.write(part)
+                        written += len(part)
+            output.flush()
+            os.fsync(output.fileno())
+        if written != int(session["size"]):
+            raise ValueError("file size mismatch")
+        if requested_hash != "server" and digest.hexdigest() != requested_hash:
+            raise ValueError("file SHA-256 mismatch")
+        os.replace(temporary, target)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    with connect() as conn:
+        conn.execute("DELETE FROM file_binary_chunks WHERE upload_id = ?", (upload_id,))
+        conn.execute("DELETE FROM file_binary_uploads WHERE id = ?", (upload_id,))
+        conn.commit()
+    shutil.rmtree(staging, ignore_errors=True)
+    relative = target.relative_to(file_transfer_root()).as_posix()
+    return {"path": relative, "name": target.name, "size": written, "mime_type": str(session["mime_type"])}
 
 
 def clipboard_note_title(title: str, body: str) -> str:
@@ -3770,11 +4035,13 @@ class ChatHandler(BaseHTTPRequestHandler):
                 if file_path == "config":
                     self.send_json({
                         "root": file_transfer_root_label(),
-                        "max_file_bytes": file_transfer_max_bytes(),
+                        "max_file_bytes": binary_file_transfer_max_bytes(),
                         "max_note_bytes": MAX_CLIPBOARD_NOTE_BYTES,
+                        "transfer_protocol": "binary-v2" if binary_transfer_enabled() else "legacy",
                         "transport": {
-                            "chunkBytes": upload_chunk_bytes(),
-                            "concurrency": upload_concurrency(),
+                            "chunkBytes": binary_upload_chunk_bytes() if binary_transfer_enabled() else upload_chunk_bytes(),
+                            "concurrency": min(upload_concurrency(), upload_concurrency_max()),
+                            "concurrencyMax": upload_concurrency_max(),
                             "retryLimit": upload_retry_limit(),
                         },
                     })
@@ -3832,6 +4099,11 @@ class ChatHandler(BaseHTTPRequestHandler):
                     return
                 if file_path == "upload/finish":
                     self.send_json({"ok": True, "file": finish_file_upload(int(payload.get("upload_id") or 0))})
+                    return
+                if file_path == "upload/status-binary":
+                    query = parse_qs(parsed.query)
+                    self.send_json(get_binary_file_upload_status(
+                        int(query.get("upload_id", ["0"])[0]), query.get("nonce", [""])[0]))
                     return
                 if file_path == "download":
                     target, filename, content_type = downloadable_transfer_file(str(payload.get("path") or ""))
@@ -4095,6 +4367,30 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.send_text("unauthorized", HTTPStatus.UNAUTHORIZED)
             return
         length = int(self.headers.get("content-length", "0"))
+        if path == "/f/upload/start-binary":
+            if length > 1024 * 1024:
+                self.send_text("payload too large", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                return
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                self.send_json(create_binary_file_upload(
+                    str(payload.get("directory") or ""), str(payload.get("filename") or "file"),
+                    str(payload.get("mime_type") or "application/octet-stream"), int(payload.get("size") or 0)))
+            except Exception as exc:
+                self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
+            return
+        if path == "/f/upload/finish-binary":
+            if length > 1024 * 1024:
+                self.send_text("payload too large", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                return
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                self.send_json({"ok": True, "file": finish_binary_file_upload(
+                    int(payload.get("upload_id") or 0), str(payload.get("nonce") or ""),
+                    str(payload.get("sha256") or ""))})
+            except Exception as exc:
+                self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
+            return
         if length > MAX_BODY_BYTES:
             self.send_text("payload too large", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             return
@@ -4141,6 +4437,35 @@ class ChatHandler(BaseHTTPRequestHandler):
         if create_fix:
             request_id = create_fix_request(message_id)
         self.send_json({"ok": True, "message_id": message_id, "request_id": request_id})
+
+    def do_PUT(self) -> None:
+        parsed = urlparse(self.path)
+        if normalize_api_path(parsed.path) != "/f/upload/chunk-binary":
+            self.send_text("not found", HTTPStatus.NOT_FOUND)
+            return
+        if not self.auth_ok():
+            self.send_text("unauthorized", HTTPStatus.UNAUTHORIZED)
+            return
+        try:
+            query = parse_qs(parsed.query)
+            length_header = self.headers.get("content-length")
+            if length_header is None:
+                raise ValueError("Content-Length is required")
+            length = int(length_header)
+            if length < 0 or length > MAX_BINARY_UPLOAD_CHUNK_BYTES:
+                self.send_text("chunk too large", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                return
+            body = self.rfile.read(length)
+            if len(body) != length:
+                raise ValueError("incomplete chunk body")
+            result = add_binary_file_upload_chunk(
+                int(query.get("upload_id", ["0"])[0]), query.get("nonce", [""])[0],
+                int(query.get("chunk_index", ["-1"])[0]), body,
+                self.headers.get("content-range", ""), self.headers.get("x-chunk-sha256", ""),
+            )
+            self.send_json(result)
+        except Exception as exc:
+            self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
 
 
 def serve() -> None:

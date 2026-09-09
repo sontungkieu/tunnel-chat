@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -138,6 +139,42 @@ class ServerTestCase(unittest.TestCase):
             (transfer_root / "linked-dir").symlink_to(outside_dir, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "Symbolic links"):
                 server.downloadable_transfer_file("linked-dir/secret.txt")
+
+    def test_binary_file_upload_stages_chunks_and_finishes_atomically(self) -> None:
+        transfer_root = Path(self.temp_dir.name) / "binary-transfer"
+        data = b"A" * 7 + b"B" * 5
+        with mock.patch.object(server, "load_config", return_value={
+            "file_transfer_root": str(transfer_root), "file_transfer_max_bytes": str(10 * 1024 * 1024),
+            "file_transfer_staging_max_bytes": str(20 * 1024 * 1024),
+        }), mock.patch.object(server, "binary_upload_chunk_bytes", return_value=8):
+            started = server.create_binary_file_upload("reports", "large.bin", "application/octet-stream", len(data))
+            upload_id, nonce = int(started["upload_id"]), str(started["nonce"])
+            server.add_binary_file_upload_chunk(upload_id, nonce, 1, data[8:], "bytes 8-11/12", hashlib.sha256(data[8:]).hexdigest())
+            with server.connect() as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM file_binary_chunks").fetchone()[0], 1)
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM file_binary_uploads").fetchone()[0], 1)
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM file_upload_chunks").fetchone()[0], 0)
+            status = server.get_binary_file_upload_status(upload_id, nonce)
+            self.assertEqual(status["missing_ranges"], "0")
+            server.add_binary_file_upload_chunk(upload_id, nonce, 0, data[:8], "bytes 0-7/12", hashlib.sha256(data[:8]).hexdigest())
+            self.assertTrue(server.add_binary_file_upload_chunk(upload_id, nonce, 0, data[:8], "bytes 0-7/12", hashlib.sha256(data[:8]).hexdigest())["duplicate"])
+            result = server.finish_binary_file_upload(upload_id, nonce, hashlib.sha256(data).hexdigest())
+            self.assertEqual((transfer_root / "reports" / "large.bin").read_bytes(), data)
+            self.assertEqual(result["path"], "reports/large.bin")
+            self.assertFalse((transfer_root / ".incoming" / str(upload_id)).exists())
+
+    def test_binary_file_upload_rejects_conflicting_chunk_and_bad_hash(self) -> None:
+        transfer_root = Path(self.temp_dir.name) / "binary-transfer"
+        with mock.patch.object(server, "load_config", return_value={"file_transfer_root": str(transfer_root), "file_transfer_max_bytes": str(10 * 1024 * 1024)}), \
+             mock.patch.object(server, "binary_upload_chunk_bytes", return_value=4):
+            started = server.create_binary_file_upload("", "sample.bin", "application/octet-stream", 4)
+            upload_id, nonce = int(started["upload_id"]), str(started["nonce"])
+            with self.assertRaisesRegex(ValueError, "SHA-256 mismatch"):
+                server.add_binary_file_upload_chunk(upload_id, nonce, 0, b"test", "bytes 0-3/4", "0" * 64)
+            digest = hashlib.sha256(b"test").hexdigest()
+            server.add_binary_file_upload_chunk(upload_id, nonce, 0, b"test", "bytes 0-3/4", digest)
+            with self.assertRaisesRegex(ValueError, "conflicting duplicate"):
+                server.add_binary_file_upload_chunk(upload_id, nonce, 0, b"nope", "bytes 0-3/4", hashlib.sha256(b"nope").hexdigest())
 
     def test_clipboard_notes_use_chunked_utf8_preview_and_delete(self) -> None:
         body = ("Dòng clipboard dài có Unicode ✓\n" * 150).strip()

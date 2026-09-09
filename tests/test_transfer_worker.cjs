@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
+const {webcrypto} = require("node:crypto");
 
 function clone(value) {
   return value === undefined ? undefined : structuredClone(value);
@@ -164,4 +165,51 @@ test("service worker persists file and note jobs then resumes them after authent
   assert.ok(requests.every(request => request.options.headers["x-chat-token"] === "test-secret"));
   assert.ok(!JSON.stringify(completed).includes("test-secret"));
   assert.ok(clientMessages.some(message => message.job?.state === "complete"));
+});
+
+test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges", async () => {
+  const job = {
+    id: "binary-1", kind: "file", name: "ten.bin", mimeType: "application/octet-stream", size: 10,
+    directory: "incoming", blob: new Blob(["abcdefghij"]), state: "queued", progress: 0,
+    receivedBytes: 0, detail: "Đang chờ upload", error: "", result: null, uploadId: null,
+    protocol: null, createdAt: 1, updatedAt: 1,
+  };
+  const database = fakeIndexedDb([job]);
+  const events = new Map();
+  const chunks = new Map();
+  const requests = [];
+  const self = {
+    clients: {matchAll: async () => [{postMessage: value => {}}], claim: async () => {}},
+    skipWaiting: async () => {}, addEventListener: (name, listener) => events.set(name, listener),
+  };
+  const context = {
+    self, indexedDB: database.api, Blob, URL, URLSearchParams, TextEncoder, crypto: webcrypto,
+    setTimeout, clearTimeout, console, Math,
+    fetch: async (url, options = {}) => {
+      requests.push({url, options});
+      if (url.startsWith("/f/upload/start-binary")) return Response.json({upload_id: 41, nonce: "nonce", chunk_bytes: 4, total_chunks: 3});
+      if (url.startsWith("/f/upload/status-binary")) return Response.json({missing: [1], received_bytes: 6});
+      if (url.startsWith("/f/upload/chunk-binary")) {
+        assert.equal(options.method, "PUT");
+        assert.equal(options.headers["content-type"], "application/octet-stream");
+        const body = Buffer.from(await new Response(options.body).arrayBuffer());
+        const index = Number(new URL(url, "https://example.test").searchParams.get("chunk_index"));
+        chunks.set(index, body);
+        return Response.json({ok: true});
+      }
+      if (url.startsWith("/f/upload/finish-binary")) return Response.json({file: {path: "incoming/ten.bin"}});
+      throw new Error(`unexpected request: ${url}`);
+    }, Response,
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "static", "transfer-worker.js"), "utf8"), context);
+  let pending;
+  events.get("message")({data: {type: "configure", config: {token: "secret", transferProtocol: "binary-v2", chunkBytes: 4, concurrency: 2, concurrencyMax: 4, retryLimit: 1}}, waitUntil: promise => {pending = promise;}});
+  await pending;
+  const completed = database.records.get(job.id);
+  assert.equal(completed.state, "complete");
+  assert.equal(completed.protocol, "binary-v2");
+  assert.deepEqual([...chunks.keys()], [1]);
+  assert.equal(chunks.get(1).toString(), "efgh");
+  assert.ok(requests.some(request => request.url.startsWith("/f/upload/chunk-binary")));
+  assert.ok(requests.every(request => request.options.headers["x-chat-token"] === "secret"));
 });

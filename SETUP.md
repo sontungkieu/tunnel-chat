@@ -72,8 +72,12 @@ Tunnel và lưu launcher URL mà không đưa token vào câu trả lời của 
   dùng `/codex`.
 - `/files`: kho truyền file hai chiều riêng, mặc định chỉ mở
   `D:\dev\codex\vai`. Dùng `./bin/url files` để lấy liên kết kèm access token.
-  Có thể đổi `FILE_TRANSFER_ROOT` và `FILE_TRANSFER_MAX_BYTES` trong
-  `.env.local`; giới hạn upload mặc định là 32 MiB mỗi file. File đã chọn được
+  Có thể đổi `FILE_TRANSFER_ROOT`, `FILE_TRANSFER_MAX_BYTES` và
+  `FILE_TRANSFER_STAGING_MAX_BYTES` trong `.env.local`; cấu hình Windows hiện
+  tại cho phép tối đa 10 GiB mỗi file, chunk nhị phân 8 MiB và tối đa 8 luồng
+  thích ứng. File lớn được staging trên đĩa, có checksum từng chunk, resume
+  theo phần còn thiếu và publish atomic; trình duyệt cũ tự fallback về giao
+  thức cũ. File đã chọn được
   giữ trong hàng đợi IndexedDB và service worker tiếp tục/resume khi chuyển giữa
   `/files`, `/codex` và `/chat/`. Cùng trang có Clipboard notes: dán nội dung,
   gửi nền, mở/sao chép/tải `.txt` hoặc xóa từng note. Trình duyệt phải mở qua
