@@ -70,12 +70,17 @@ Tunnel và lưu launcher URL mà không đưa token vào câu trả lời của 
 - `/chat/`: browser ChatGPT riêng. Thành phần này có profile và mật khẩu riêng;
   xem [`chatgpt-web/README.md`](chatgpt-web/README.md). Nó không cần thiết để
   dùng `/codex`.
+- `/files`: kho truyền file hai chiều riêng, mặc định chỉ mở
+  `D:\dev\codex\vai`. Dùng `./bin/url files` để lấy liên kết kèm access token.
+  Có thể đổi `FILE_TRANSFER_ROOT` và `FILE_TRANSFER_MAX_BYTES` trong
+  `.env.local`; giới hạn upload mặc định là 32 MiB mỗi file.
 
 ## Vận hành
 
 ```bash
 ./bin/doctor
 ./bin/url codex
+./bin/url files
 ./bin/stop
 ./bin/start
 ```

@@ -22,7 +22,7 @@ elif [ -f run/cloudflared.pid ] && [ -f run/cloudflared.url ] && kill -0 "$(cat 
     base="$(tr -d '\n' < run/cloudflared.url)/"
 fi
 case "$path" in
-    /codex|/codex/|/codex/cli|/desktop|/desktop/|/queue)
+    /codex|/codex/|/codex/cli|/desktop|/desktop/|/queue|/files|/files/)
         printf '%s%s#token=%s\n' "${base%/}" "$path" "$CHAT_ACCESS_TOKEN" ;;
     /*)
         printf '%s%s\n' "${base%/}" "$path" ;;

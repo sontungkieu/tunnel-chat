@@ -25,16 +25,18 @@ Thực hiện theo thứ tự:
 3. Chạy ./bin/doctor --desktop. Với bản cài mới, bảo đảm .env.local có
    TUNNEL_MODE=quick, DESKTOP_ENABLED=1, DESKTOP_NODE trỏ tới Windows node.exe,
    GATEWAY_NODE trỏ tới Node Linux/WSL và không còn đường dẫn của máy người khác.
-   Tạo backup trước khi sửa một .env.local đã có nội dung.
+   Đặt FILE_TRANSFER_ROOT tới một thư mục dữ liệu riêng phù hợp; mặc định Windows
+   là D:\dev\codex\vai. Tạo backup trước khi sửa một .env.local đã có nội dung.
 4. Giữ ứng dụng Codex Desktop trên Windows đang mở rồi chạy ./bin/start. Chờ
    Quick Tunnel cấp URL; không đổi sang named tunnel khi Quick Tunnel hoạt động.
 5. Kiểm tra HTTP local tại http://127.0.0.1:8787/codex, PID bằng ./bin/doctor,
    file run/quick-cloudflared.url và khả năng truy cập public /codex. Không gửi
    model prompt và không thay đổi task chỉ để smoke test.
-6. Tạo launcher bằng lệnh `./bin/url codex > run/codex-url.txt`. Không cat file
-   này trong tool output và không đưa CHAT_ACCESS_TOKEN hoặc URL có #token vào
-   câu trả lời. Nếu clip.exe có sẵn, copy file vào Windows clipboard; nếu không,
-   chỉ cho tôi biết đường dẫn tuyệt đối tới run/codex-url.txt để tôi tự mở.
+6. Tạo launcher bằng các lệnh `./bin/url codex > run/codex-url.txt` và
+   `./bin/url files > run/files-url.txt`. Không cat các file này trong tool output
+   và không đưa CHAT_ACCESS_TOKEN hoặc URL có #token vào câu trả lời. Nếu clip.exe
+   có sẵn, copy launcher Codex vào Windows clipboard; nếu không, chỉ cho tôi biết
+   đường dẫn tuyệt đối tới hai file launcher để tôi tự mở.
 7. Nói rõ Quick Tunnel URL sẽ đổi sau khi restart. Hướng dẫn tôi mở launcher URL,
    mở task đích trong Codex Desktop, dán codex://threads/<task-id> vào trang và
    bấm Kết nối.

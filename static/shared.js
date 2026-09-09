@@ -199,6 +199,7 @@
 
   global.RLCSDTransport = {
     accessToken,
+    encodePayload,
     download,
     createRpc,
     uploadBlob,

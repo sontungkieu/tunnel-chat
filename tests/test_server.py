@@ -92,6 +92,53 @@ class ServerTestCase(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "size mismatch"):
             server.add_upload_chunk(upload_id, 0, encode_chunk(b"short"))
 
+    def test_file_transfer_is_resumable_confined_and_never_overwrites(self) -> None:
+        transfer_root = Path(self.temp_dir.name) / "transfer"
+        config = {
+            "file_transfer_root": str(transfer_root),
+            "file_transfer_max_bytes": str(32 * 1024 * 1024),
+            "upload_chunk_bytes": "2048",
+        }
+        data = (b"binary-file\x00" * 300) + b"done"
+        with mock.patch.object(server, "load_config", return_value=config):
+            total_chunks = server.expected_upload_chunks(len(data))
+            upload_id = server.create_file_upload("reports", "result.bin", "application/octet-stream",
+                                                  len(data), total_chunks)
+            for index in reversed(range(total_chunks)):
+                chunk = data[index * 2048 : (index + 1) * 2048]
+                server.add_file_upload_chunk(upload_id, index, encode_chunk(chunk))
+            self.assertEqual(server.get_upload_status("file", upload_id)["missing"], [])
+            first = server.finish_file_upload(upload_id)
+            self.assertEqual(first["path"], "reports/result.bin")
+            self.assertEqual((transfer_root / "reports/result.bin").read_bytes(), data)
+
+            second_id = server.create_file_upload("reports", "result.bin", "application/octet-stream",
+                                                   len(data), total_chunks)
+            for index in range(total_chunks):
+                chunk = data[index * 2048 : (index + 1) * 2048]
+                server.add_file_upload_chunk(second_id, index, encode_chunk(chunk))
+            second = server.finish_file_upload(second_id)
+            self.assertEqual(second["path"], "reports/result-1.bin")
+            listing = server.list_transfer_files("reports")
+            self.assertEqual(listing["parent"], "")
+            self.assertEqual([item["name"] for item in listing["entries"]], ["result-1.bin", "result.bin"])
+            self.assertEqual(server.list_transfer_files("reports/")["path"], "reports")
+            path, name, mime_type = server.downloadable_transfer_file("reports/result.bin")
+            self.assertEqual((path.read_bytes(), name, mime_type), (data, "result.bin", "application/octet-stream"))
+            with self.assertRaisesRegex(ValueError, "Invalid path|inside FILE_TRANSFER_ROOT"):
+                server.file_transfer_path("../outside.txt")
+            outside = Path(self.temp_dir.name) / "outside.txt"
+            outside.write_text("secret", encoding="utf-8")
+            (transfer_root / "link.txt").symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "Symbolic links"):
+                server.downloadable_transfer_file("link.txt")
+            outside_dir = Path(self.temp_dir.name) / "outside-dir"
+            outside_dir.mkdir()
+            (outside_dir / "secret.txt").write_text("secret", encoding="utf-8")
+            (transfer_root / "linked-dir").symlink_to(outside_dir, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "Symbolic links"):
+                server.downloadable_transfer_file("linked-dir/secret.txt")
+
     def test_prompt_upload_uses_utf8_bytes_and_starts_one_turn(self) -> None:
         chat_id = self.create_chat()
         prompt = "Loi CUDA tieng Viet\n" * 500

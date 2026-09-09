@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Tunnel Chat · Truyền file</title>
+  <script>try{document.documentElement.dataset.theme=localStorage.getItem("tunnelChatTheme")||
+    (matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch(_error){}</script>
+  <link rel="stylesheet" href="/static/files.css">
+  <script defer src="/static/shared.js"></script><script defer src="/static/files.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/files"><span aria-hidden="true">T</span><strong>Truyền file</strong></a>
+    <nav aria-label="Điều hướng"><a href="/chat/">ChatGPT web</a><a href="/codex">Codex</a><a href="/queue">Fix queue</a></nav>
+    <button type="button" id="themeToggle" class="icon-button" aria-label="Đổi giao diện sáng tối"><span id="themeIcon">☾</span></button>
+  </header>
+
+  <main>
+    <section id="authPanel" class="card auth-card" hidden>
+      <p class="eyebrow">Xác thực</p><h1>Mở kho truyền file</h1>
+      <p class="muted">Dán access token Codex hoặc mở liên kết do <code>./bin/url files</code> tạo.</p>
+      <form id="authForm"><label for="tokenInput">Access token</label><input id="tokenInput" type="password" required autocomplete="off">
+        <button type="submit" class="primary">Mở kho file</button></form>
+    </section>
+
+    <div id="workspace" hidden>
+      <section class="hero">
+        <div><p class="eyebrow">Kho riêng trên máy cá nhân</p><h1>Truyền file hai chiều</h1>
+          <p class="muted">Mọi thao tác được giới hạn trong <strong id="rootLabel">D:\dev\codex\vai</strong>.</p></div>
+        <button type="button" id="logout" class="secondary">Xóa token</button>
+      </section>
+
+      <div id="notice" role="status" aria-live="polite" hidden></div>
+      <section id="progressPanel" class="progress-card" aria-live="polite" hidden>
+        <div><strong id="progressTitle">Đang xử lý</strong><span id="progressMeta"></span></div>
+        <div id="progressTrack" class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="progressBar"></span></div>
+      </section>
+
+      <div class="grid">
+        <section class="card upload-card">
+          <p class="eyebrow">Thiết bị hiện tại → máy cá nhân</p><h2>Upload vào kho</h2>
+          <form id="uploadForm">
+            <label for="destination">Thư mục đích</label>
+            <input id="destination" placeholder="Để trống để lưu ở thư mục gốc" autocomplete="off">
+            <label class="file-picker" for="uploadFiles"><span aria-hidden="true">＋</span><span><strong>Chọn file</strong><small id="fileHint">Có thể chọn nhiều file</small></span></label>
+            <input id="uploadFiles" type="file" multiple>
+            <div id="selectedFiles" class="selected-files muted">Chưa chọn file.</div>
+            <button id="uploadButton" type="submit" class="primary">Upload về máy cá nhân</button>
+          </form>
+        </section>
+
+        <section class="card browser-card">
+          <div class="card-heading"><div><p class="eyebrow">Máy cá nhân → thiết bị hiện tại</p><h2>Chọn file để tải xuống</h2></div>
+            <button type="button" id="refresh" class="icon-button" aria-label="Làm mới danh sách">↻</button></div>
+          <form id="pathForm" class="path-form">
+            <label for="pathInput">Đường dẫn trong kho hoặc đường dẫn Windows đầy đủ</label>
+            <div><input id="pathInput" placeholder="models hoặc D:\dev\codex\vai\models" autocomplete="off">
+              <button type="submit" class="secondary">Mở thư mục</button><button type="button" id="downloadPath" class="primary">Tải file</button></div>
+          </form>
+          <div class="browser-toolbar"><button type="button" id="up" class="secondary">← Thư mục cha</button><code id="currentPath">/</code></div>
+          <div id="fileList" class="file-list" aria-label="File trên máy cá nhân"></div>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

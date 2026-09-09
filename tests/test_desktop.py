@@ -286,6 +286,8 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(get("/")[0],302)
             for path in ("/codex", "/codex/cli", "/queue"):
                 self.assertEqual(get(path)[0],200)
+            self.assertEqual(get("/files")[0],200)
+            self.assertEqual(get("/f/config")[0],401)
             self.assertIn(b'href="/chat/"', get("/codex")[1])
             self.assertIn(b'type="button" id="linkButton"', get("/codex")[1])
             self.assertIn(b'id="taskContextMenu"', get("/codex")[1])
@@ -296,6 +298,8 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(get("/static/desktop.js")[0],200)
             self.assertEqual(get("/static/rich-text.js")[0],200)
             self.assertEqual(get("/static/selection-quote.js")[0],200)
+            self.assertEqual(get("/static/files.js")[0],200)
+            self.assertEqual(get("/static/files.css")[0],200)
             self.assertEqual(get("/static/vendor/katex-0.18.5.min.css")[0],200)
             self.assertEqual(get("/static/vendor/fonts/KaTeX_Main-Regular.woff2")[0],200)
             self.assertEqual(get("/static/vendor/../desktop.js")[0],404)

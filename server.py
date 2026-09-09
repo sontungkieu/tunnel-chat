@@ -47,10 +47,14 @@ MAX_UPLOAD_RETRY_LIMIT = 8
 DEFAULT_UPLOAD_TTL_SECONDS = 6 * 60 * 60
 MIN_UPLOAD_TTL_SECONDS = 5 * 60
 MAX_UPLOAD_TTL_SECONDS = 7 * 24 * 60 * 60
+DEFAULT_FILE_TRANSFER_ROOT = r"D:\dev\codex\vai"
+DEFAULT_FILE_TRANSFER_MAX_BYTES = 32 * 1024 * 1024
+MIN_FILE_TRANSFER_MAX_BYTES = 1024 * 1024
+MAX_FILE_TRANSFER_MAX_BYTES = 128 * 1024 * 1024
 MAX_QUEUE_UPLOAD_BYTES = 4 * 1024 * 1024
 MAX_CODEX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 MAX_CODEX_PROMPT_BYTES = 4 * 1024 * 1024
-MAX_UPLOAD_CHUNKS = 8192
+MAX_UPLOAD_CHUNKS = 65536
 ATTACHMENT_PREFIX = "RLCSD_TEXT_ATTACHMENT:"
 API_COMPAT_PREFIX = "/api"
 API_PREFIX = "/x"
@@ -106,6 +110,8 @@ def load_config() -> dict[str, str]:
         "upload_concurrency": merged.get("UPLOAD_CONCURRENCY", str(DEFAULT_UPLOAD_CONCURRENCY)),
         "upload_retry_limit": merged.get("UPLOAD_RETRY_LIMIT", str(DEFAULT_UPLOAD_RETRY_LIMIT)),
         "upload_ttl_seconds": merged.get("UPLOAD_TTL_SECONDS", str(DEFAULT_UPLOAD_TTL_SECONDS)),
+        "file_transfer_root": merged.get("FILE_TRANSFER_ROOT", DEFAULT_FILE_TRANSFER_ROOT),
+        "file_transfer_max_bytes": merged.get("FILE_TRANSFER_MAX_BYTES", str(DEFAULT_FILE_TRANSFER_MAX_BYTES)),
     }
 
 
@@ -140,6 +146,15 @@ def upload_retry_limit() -> int:
         DEFAULT_UPLOAD_RETRY_LIMIT,
         MIN_UPLOAD_RETRY_LIMIT,
         MAX_UPLOAD_RETRY_LIMIT,
+    )
+
+
+def file_transfer_max_bytes() -> int:
+    return bounded_config_int(
+        "file_transfer_max_bytes",
+        DEFAULT_FILE_TRANSFER_MAX_BYTES,
+        MIN_FILE_TRANSFER_MAX_BYTES,
+        MAX_FILE_TRANSFER_MAX_BYTES,
     )
 
 
@@ -232,6 +247,8 @@ def ensure_env() -> None:
         f"UPLOAD_CONCURRENCY={DEFAULT_UPLOAD_CONCURRENCY}\n"
         f"UPLOAD_RETRY_LIMIT={DEFAULT_UPLOAD_RETRY_LIMIT}\n"
         f"UPLOAD_TTL_SECONDS={DEFAULT_UPLOAD_TTL_SECONDS}\n"
+        f"FILE_TRANSFER_ROOT='{DEFAULT_FILE_TRANSFER_ROOT}'\n"
+        f"FILE_TRANSFER_MAX_BYTES={DEFAULT_FILE_TRANSFER_MAX_BYTES}\n"
         f"CODEX_BIN='{DEFAULT_CODEX_BIN}'\n"
         f"CODEX_REPOS='{os.pathsep.join(DEFAULT_CODEX_REPOS)}'\n"
         f"CODEX_HOME='{DEFAULT_CODEX_HOME}'\n"
@@ -390,6 +407,29 @@ def connect() -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS file_uploads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            relative_dir TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            total_chunks INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS file_upload_chunks (
+            upload_id INTEGER NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            body TEXT NOT NULL,
+            PRIMARY KEY (upload_id, chunk_index)
+        )
+        """
+    )
     try:
         conn.execute("ALTER TABLE codex_prompt_uploads ADD COLUMN attachment_ids TEXT")
     except sqlite3.OperationalError as exc:
@@ -484,6 +524,7 @@ UPLOAD_TABLES = {
     "queue": ("upload_sessions", "upload_chunks"),
     "attachment": ("codex_attachment_uploads", "codex_attachment_chunks"),
     "prompt": ("codex_prompt_uploads", "codex_prompt_chunks"),
+    "file": ("file_uploads", "file_upload_chunks"),
 }
 
 
@@ -1050,6 +1091,189 @@ def parse_id_list(value: object) -> list[int]:
 def safe_filename(filename: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename or "attachment").name).strip("._")
     return cleaned[:160] or "attachment"
+
+
+def file_transfer_root(create: bool = True) -> Path:
+    raw = str(load_config().get("file_transfer_root") or DEFAULT_FILE_TRANSFER_ROOT).strip()
+    if re.fullmatch(r"[A-Za-z]:[\\/].+", raw):
+        root = desktop.local_path_from_windows(raw)
+    else:
+        root = Path(raw).expanduser()
+        if not root.is_absolute():
+            raise ValueError("FILE_TRANSFER_ROOT must be an absolute path")
+    root = root.resolve(strict=False)
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def file_transfer_path(value: str = "", *, must_exist: bool = False) -> tuple[Path, str]:
+    root = file_transfer_root()
+    raw = str(value or "").strip()
+    if len(raw) > 1:
+        raw = raw.rstrip("\\/")
+    if not raw:
+        candidate = root
+    elif re.fullmatch(r"[A-Za-z]:[\\/].+", raw):
+        candidate = desktop.local_path_from_windows(raw)
+    elif Path(raw).is_absolute():
+        candidate = Path(raw)
+    else:
+        parts = raw.replace("\\", "/").split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            raise ValueError("Invalid path inside file transfer root")
+        candidate = root.joinpath(*parts)
+    lexical = candidate.absolute()
+    if lexical.is_relative_to(root):
+        cursor = lexical
+        while cursor != root:
+            if cursor.is_symlink():
+                raise ValueError("Symbolic links are not available through file transfer")
+            cursor = cursor.parent
+    resolved = candidate.resolve(strict=False)
+    if not resolved.is_relative_to(root):
+        raise ValueError("Path must stay inside FILE_TRANSFER_ROOT")
+    if must_exist and not resolved.exists():
+        raise ValueError("File or directory does not exist")
+    relative = resolved.relative_to(root).as_posix()
+    return resolved, "" if relative == "." else relative
+
+
+def file_transfer_root_label() -> str:
+    return str(load_config().get("file_transfer_root") or DEFAULT_FILE_TRANSFER_ROOT)
+
+
+def list_transfer_files(value: str = "") -> dict[str, object]:
+    directory, relative = file_transfer_path(value, must_exist=True)
+    if not directory.is_dir():
+        raise ValueError("Path is not a directory")
+    entries: list[dict[str, object]] = []
+    for child in directory.iterdir():
+        if child.is_symlink():
+            continue
+        try:
+            is_directory = child.is_dir()
+            is_file = child.is_file()
+            stat_result = child.stat()
+        except OSError:
+            continue
+        if not is_directory and not is_file:
+            continue
+        child_relative = child.resolve().relative_to(file_transfer_root()).as_posix()
+        entries.append({
+            "name": child.name,
+            "path": child_relative,
+            "kind": "directory" if is_directory else "file",
+            "size": None if is_directory else int(stat_result.st_size),
+            "modified": datetime.fromtimestamp(stat_result.st_mtime, timezone.utc).isoformat(timespec="seconds"),
+        })
+    entries.sort(key=lambda item: (item["kind"] != "directory", str(item["name"]).casefold()))
+    truncated = len(entries) > 500
+    parent = Path(relative).parent.as_posix() if relative else None
+    if parent == ".":
+        parent = ""
+    return {
+        "path": relative,
+        "parent": parent,
+        "entries": entries[:500],
+        "truncated": truncated,
+    }
+
+
+def create_file_upload(relative_dir: str, filename: str, mime_type: str,
+                       size: int, total_chunks: int) -> int:
+    directory, normalized_dir = file_transfer_path(relative_dir)
+    if directory.exists() and not directory.is_dir():
+        raise ValueError("Upload destination is not a directory")
+    validate_upload_shape(int(size), int(total_chunks), file_transfer_max_bytes(), "file")
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO file_uploads(created_at, relative_dir, filename, mime_type, size, total_chunks)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (now_iso(), normalized_dir, safe_filename(filename),
+             (mime_type or "application/octet-stream")[:120], int(size), int(total_chunks)),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def add_file_upload_chunk(upload_id: int, chunk_index: int, body: str) -> None:
+    with connect() as conn:
+        session = conn.execute(
+            "SELECT size, total_chunks FROM file_uploads WHERE id = ?", (upload_id,)
+        ).fetchone()
+        if session is None:
+            raise ValueError(f"unknown file upload #{upload_id}")
+        total_chunks = int(session["total_chunks"])
+        if chunk_index < 0 or chunk_index >= total_chunks:
+            raise ValueError(f"chunk_index must be between 0 and {total_chunks - 1}")
+        validate_base64url_chunk(body, chunk_index, int(session["size"]), total_chunks)
+        conn.execute(
+            "INSERT OR REPLACE INTO file_upload_chunks(upload_id, chunk_index, body) VALUES (?, ?, ?)",
+            (upload_id, int(chunk_index), body),
+        )
+        conn.commit()
+
+
+def unique_transfer_path(directory: Path, filename: str) -> Path:
+    target = directory / safe_filename(filename)
+    if not target.exists():
+        return target
+    stem, suffix = target.stem, target.suffix
+    for index in range(1, 10000):
+        candidate = directory / f"{stem}-{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise ValueError("Too many files with the same name")
+
+
+def finish_file_upload(upload_id: int) -> dict[str, object]:
+    with connect() as conn:
+        session = conn.execute(
+            "SELECT relative_dir, filename, mime_type, size, total_chunks FROM file_uploads WHERE id = ?",
+            (upload_id,),
+        ).fetchone()
+        if session is None:
+            raise ValueError(f"unknown file upload #{upload_id}")
+        chunks = conn.execute(
+            "SELECT chunk_index, body FROM file_upload_chunks WHERE upload_id = ? ORDER BY chunk_index",
+            (upload_id,),
+        ).fetchall()
+        total_chunks = int(session["total_chunks"])
+        if len(chunks) != total_chunks:
+            raise ValueError(f"file upload #{upload_id} has {len(chunks)}/{total_chunks} chunks")
+        directory, relative_dir = file_transfer_path(str(session["relative_dir"]))
+        directory.mkdir(parents=True, exist_ok=True)
+        target = unique_transfer_path(directory, str(session["filename"]))
+        fd, temporary_name = tempfile.mkstemp(prefix=".tunnel-chat-", dir=directory)
+        written = 0
+        try:
+            with os.fdopen(fd, "wb") as output:
+                for row in chunks:
+                    data = decode_base64url_chunk(str(row["body"]))
+                    output.write(data)
+                    written += len(data)
+            if written != int(session["size"]):
+                raise ValueError(f"file upload #{upload_id} size mismatch")
+            os.replace(temporary_name, target)
+        except Exception:
+            Path(temporary_name).unlink(missing_ok=True)
+            raise
+        conn.execute("DELETE FROM file_upload_chunks WHERE upload_id = ?", (upload_id,))
+        conn.execute("DELETE FROM file_uploads WHERE id = ?", (upload_id,))
+        conn.commit()
+    relative = target.relative_to(file_transfer_root()).as_posix()
+    return {"path": relative, "name": target.name, "size": written,
+            "mime_type": str(session["mime_type"])}
+
+
+def downloadable_transfer_file(value: str) -> tuple[Path, str, str]:
+    path, relative = file_transfer_path(value, must_exist=True)
+    if not path.is_file():
+        raise ValueError("Path is not a regular file")
+    return path, path.name, mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
 
 def is_text_like_attachment(filename: str, mime_type: str) -> bool:
@@ -1952,11 +2176,11 @@ def html_page() -> str:
   </style>
 </head>
 <body>
-  <nav style="padding:8px 16px"><a href="/codex">Desktop app</a> · <a href="/codex/cli">WSL CLI</a> · <a href="/queue">Fix queue</a></nav>
+  <nav style="padding:8px 16px"><a href="/codex">Desktop app</a> · <a href="/codex/cli">WSL CLI</a> · <a href="/files">Truyền file</a> · <a href="/queue">Fix queue</a></nav>
   <header>
     <h1>RLCSD Fix Chat</h1>
     <div>
-      <a href="/codex">Desktop app</a> · <a href="/codex/cli">WSL CLI</a>
+      <a href="/codex">Desktop app</a> · <a href="/codex/cli">WSL CLI</a> · <a href="/files">Truyền file</a>
       <button id="downloadRepo" type="button">Download zip</button>
       <span id="status">connecting</span>
     </div>
@@ -2824,7 +3048,7 @@ def codex_page() -> str:
         <option value="/codex">ChatGPT app (Windows)</option>
         <option value="/codex/cli" selected>Codex CLI (WSL)</option>
       </select>
-      <a href="/chat/">ChatGPT web</a><a href="/queue">Fix queue</a>
+      <a href="/chat/">ChatGPT web</a><a href="/files">Truyền file</a><a href="/queue">Fix queue</a>
       <span id="status">connecting</span>
     </div>
   </header>
@@ -3359,7 +3583,8 @@ class ChatHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         raw_path = parsed.path
         path = normalize_api_path(raw_path)
-        if path in {"/static/shared.js", "/static/desktop.js", "/static/rich-text.js", "/static/selection-quote.js", "/static/desktop.css"}:
+        if path in {"/static/shared.js", "/static/desktop.js", "/static/rich-text.js", "/static/selection-quote.js",
+                    "/static/desktop.css", "/static/files.js", "/static/files.css"}:
             static_path = BASE_DIR / "static" / Path(path).name
             data = static_path.read_bytes()
             self.send_response(HTTPStatus.OK)
@@ -3384,6 +3609,56 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if raw_path.startswith("/f/"):
+            if not self.auth_ok():
+                self.send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+                return
+            try:
+                payload = decode_get_payload(parse_qs(parsed.query))
+                file_path = raw_path[3:]
+                if file_path == "config":
+                    self.send_json({
+                        "root": file_transfer_root_label(),
+                        "max_file_bytes": file_transfer_max_bytes(),
+                        "transport": {
+                            "chunkBytes": upload_chunk_bytes(),
+                            "concurrency": upload_concurrency(),
+                            "retryLimit": upload_retry_limit(),
+                        },
+                    })
+                    return
+                if file_path == "list":
+                    self.send_json(list_transfer_files(str(payload.get("path") or "")))
+                    return
+                if file_path == "upload/start":
+                    upload_id = create_file_upload(
+                        str(payload.get("directory") or ""), str(payload.get("filename") or "file"),
+                        str(payload.get("mime_type") or "application/octet-stream"),
+                        int(payload.get("size") or 0), int(payload.get("total_chunks") or 0),
+                    )
+                    self.send_json({"ok": True, "upload_id": upload_id})
+                    return
+                if file_path == "upload/chunk":
+                    add_file_upload_chunk(
+                        int(payload.get("upload_id") or 0), int(payload.get("chunk_index") or 0),
+                        str(payload.get("body") or ""),
+                    )
+                    self.send_json({"ok": True})
+                    return
+                if file_path == "upload/status":
+                    self.send_json(get_upload_status("file", int(payload.get("upload_id") or 0)))
+                    return
+                if file_path == "upload/finish":
+                    self.send_json({"ok": True, "file": finish_file_upload(int(payload.get("upload_id") or 0))})
+                    return
+                if file_path == "download":
+                    target, filename, content_type = downloadable_transfer_file(str(payload.get("path") or ""))
+                    self.send_file(target, safe_filename(filename), content_type)
+                    return
+                self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            except Exception as exc:
+                self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
+            return
         if raw_path.startswith("/d/"):
             if not self.auth_ok():
                 self.send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
@@ -3401,8 +3676,8 @@ class ChatHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
             return
-        if path in {"/", "/desktop", "/desktop/", "/codex/", "/chat"}:
-            target = "/chat/#" if path in {"/", "/chat"} else "/codex"
+        if path in {"/", "/desktop", "/desktop/", "/codex/", "/chat", "/files/"}:
+            target = "/chat/#" if path in {"/", "/chat"} else ("/files" if path == "/files/" else "/codex")
             self.send_response(HTTPStatus.FOUND)
             self.send_header("location", target)
             self.send_header("content-length", "0")
@@ -3411,6 +3686,15 @@ class ChatHandler(BaseHTTPRequestHandler):
             return
         if path == "/codex":
             data = (BASE_DIR / "static" / "desktop.html").read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("content-type", "text/html; charset=utf-8")
+            self.send_header("cache-control", "no-store")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if path == "/files":
+            data = (BASE_DIR / "static" / "files.html").read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("content-type", "text/html; charset=utf-8")
             self.send_header("cache-control", "no-store")
@@ -3702,6 +3986,7 @@ def init_db() -> None:
 def cmd_init_env(_: argparse.Namespace) -> None:
     ensure_env()
     init_db()
+    file_transfer_root()
     print(f"initialized {BASE_DIR}")
 
 

@@ -64,6 +64,17 @@ else
     fail ".env.local is missing; run ./bin/setup"
 fi
 
+file_transfer_root="$(env_value FILE_TRANSFER_ROOT)"
+if [ -z "$file_transfer_root" ]; then file_transfer_root='D:\dev\codex\vai'; fi
+if [[ "$file_transfer_root" =~ ^[A-Za-z]:[\\/] ]] && command -v wslpath >/dev/null 2>&1; then
+    file_transfer_root="$(wslpath -u "$file_transfer_root" 2>/dev/null || true)"
+fi
+if [ -d "$file_transfer_root" ] && [ -w "$file_transfer_root" ]; then
+    pass "file transfer root is writable"
+else
+    fail "file transfer root is missing or not writable; run ./bin/setup"
+fi
+
 for service in server gateway quick-cloudflared cloudflared; do
     pid_file="$ROOT/run/$service.pid"
     if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
