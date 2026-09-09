@@ -37,6 +37,7 @@ DB_PATH = DATA_DIR / "chat.sqlite3"
 ENV_PATH = BASE_DIR / ".env.local"
 DEFAULT_PORT = 8787
 MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_BODY_PROBE_BYTES = 32 * 1024 * 1024
 DEFAULT_UPLOAD_CHUNK_BYTES = 2 * 1024
 MIN_UPLOAD_CHUNK_BYTES = 1024
 MAX_UPLOAD_CHUNK_BYTES = 32 * 1024
@@ -3984,6 +3985,21 @@ class ChatHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             return
 
+    def read_probe_body(self) -> int:
+        length_header = self.headers.get("content-length")
+        if length_header is None:
+            raise ValueError("Content-Length is required")
+        length = int(length_header)
+        if length < 0 or length > MAX_BODY_PROBE_BYTES:
+            raise ValueError(f"probe body must be at most {MAX_BODY_PROBE_BYTES} bytes")
+        remaining = length
+        while remaining:
+            block = self.rfile.read(min(1024 * 1024, remaining))
+            if not block:
+                raise ValueError("incomplete probe body")
+            remaining -= len(block)
+        return length
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         raw_path = parsed.path
@@ -4043,6 +4059,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                             "concurrency": min(upload_concurrency(), upload_concurrency_max()),
                             "concurrencyMax": upload_concurrency_max(),
                             "retryLimit": upload_retry_limit(),
+                            "probeMaxBytes": MAX_BODY_PROBE_BYTES,
                         },
                     })
                     return
@@ -4367,6 +4384,13 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.send_text("unauthorized", HTTPStatus.UNAUTHORIZED)
             return
         length = int(self.headers.get("content-length", "0"))
+        if path == "/f/probe-body":
+            try:
+                received = self.read_probe_body()
+                self.send_json({"ok": True, "bytes": received})
+            except Exception as exc:
+                self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
+            return
         if path == "/f/upload/start-binary":
             if length > 1024 * 1024:
                 self.send_text("payload too large", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
@@ -4458,6 +4482,16 @@ class ChatHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)
+        if normalize_api_path(parsed.path) == "/f/probe-body":
+            if not self.auth_ok():
+                self.send_text("unauthorized", HTTPStatus.UNAUTHORIZED)
+                return
+            try:
+                received = self.read_probe_body()
+                self.send_json({"ok": True, "bytes": received})
+            except Exception as exc:
+                self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
+            return
         if normalize_api_path(parsed.path) != "/f/upload/chunk-binary":
             self.send_text("not found", HTTPStatus.NOT_FOUND)
             return
