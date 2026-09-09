@@ -1,6 +1,7 @@
 (function (global) {
   "use strict";
 
+  const TOKEN_KEY = "tunnelChatToken";
   const sleep = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds));
 
   function encodePayload(payload) {
@@ -128,7 +129,8 @@
     const query = new URLSearchParams(location.search);
     // Migrate old links/storage once, then remove the credential from the address bar.
     let token = fragment.get("token") || query.get("token") ||
-      sessionStorage.getItem("tunnelChatToken") || localStorage.getItem("fixChatToken") || "";
+      sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY) ||
+      localStorage.getItem("fixChatToken") || "";
     localStorage.removeItem("fixChatToken");
     query.delete("token");
     fragment.delete("token");
@@ -139,8 +141,22 @@
       // authentication optional for callers that provide an in-page fallback.
       try { token = prompt("Access token") || ""; } catch { token = ""; }
     }
-    if (token) sessionStorage.setItem("tunnelChatToken", token);
+    if (token) storeAccessToken(token);
     return token;
+  }
+
+  function storeAccessToken(token) {
+    const value = String(token || "").trim();
+    if (!value) return "";
+    sessionStorage.setItem(TOKEN_KEY, value);
+    localStorage.setItem(TOKEN_KEY, value);
+    return value;
+  }
+
+  function clearAccessToken() {
+    sessionStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem("fixChatToken");
   }
 
   async function download(url, token) {
@@ -199,6 +215,8 @@
 
   global.RLCSDTransport = {
     accessToken,
+    storeAccessToken,
+    clearAccessToken,
     encodePayload,
     download,
     createRpc,

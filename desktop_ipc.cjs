@@ -672,7 +672,9 @@ class DesktopClient extends EventEmitter {
   }
   async create(sourceId, data, onProgress=()=>{}) {
     const source=await this.watch(sourceId);
-    const sourceView=projectState(source.state,source.revision),projectPath=sourceView.projectPath || sourceView.cwd;
+    const sourceView=projectState(source.state,source.revision);
+    const projectPath=typeof data.projectPath==='string' && data.projectPath.trim()
+      ? data.projectPath.trim() : sourceView.projectPath || sourceView.cwd;
     if (!projectPath) throw Error('The selected task has no project path');
     const model=optionalModel(data.model),effort=optionalEffort(data.effort);
     const prompt=String(data.text || '').trim();

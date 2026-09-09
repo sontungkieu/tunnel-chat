@@ -38,19 +38,23 @@ async function main() {
   assert.ok(Math.max(...proxyRequests.map(url=>url.length))<4096);
 
   const local = new Map([["fixChatToken","old"]]), session = new Map();
-  global.localStorage={getItem:key=>local.get(key),removeItem:key=>local.delete(key)};
-  global.sessionStorage={getItem:key=>session.get(key),setItem:(key,value)=>session.set(key,value)};
+  global.localStorage={getItem:key=>local.get(key),setItem:(key,value)=>local.set(key,value),removeItem:key=>local.delete(key)};
+  global.sessionStorage={getItem:key=>session.get(key),setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)};
   global.location={pathname:"/desktop",search:"?view=all",hash:"#token=new"};
   let rewritten;
   global.history={replaceState:(a,b,url)=>rewritten=url};
   assert.equal(RLCSDTransport.accessToken(),"new");
   assert.equal(rewritten,"/desktop?view=all");
   assert.equal(session.get("tunnelChatToken"),"new");
+  assert.equal(local.get("tunnelChatToken"),"new");
   assert.equal(local.has("fixChatToken"),false);
 
+  // A new top-level tab has separate sessionStorage but shares same-origin localStorage.
   session.clear();
   global.location={pathname:"/codex",search:"",hash:""};
   global.prompt=()=>{throw new Error("modal prompts are unavailable")};
+  assert.equal(RLCSDTransport.accessToken({promptIfMissing:false}),"new");
+  RLCSDTransport.clearAccessToken();
   assert.equal(RLCSDTransport.accessToken({promptIfMissing:false}),"");
 
   const received = new Set();

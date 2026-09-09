@@ -18,6 +18,7 @@ import time
 import uuid
 
 UUID_PATTERN = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.I)
+WINDOWS_PROJECT_PATTERN = re.compile(r"^[A-Za-z]:[\\/][^\x00-\x1f]{1,500}$")
 IMAGE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 IMAGE_SUFFIXES = {
     "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
@@ -32,6 +33,13 @@ def thread_id(value: str) -> str:
     if not UUID_PATTERN.fullmatch(value):
         raise ValueError("Paste a task ID or codex://threads/... link")
     return value.lower()
+
+
+def project_path(value: object, fallback: str) -> str:
+    candidate = str(value or fallback).strip().replace("/", "\\").rstrip("\\")
+    if not WINDOWS_PROJECT_PATTERN.fullmatch(candidate):
+        raise ValueError("Project path must be an absolute Windows path such as D:\\dev\\codex\\project")
+    return candidate
 
 
 def windows_path(value: str) -> str:
@@ -470,9 +478,9 @@ def create_task(server, source_chat_id: int, data: dict, progress=None) -> dict:
         conn.execute("INSERT INTO desktop_actions VALUES (?,?,?,?,?,?,?)",
                      (operation_id,source_chat_id,"create",fingerprint,"pending",None,server.now_iso()))
         conn.commit()
-    path = source["repo_path"]
+    path = project_path(data.get("project_path"), source["repo_path"])
     outgoing = dict(data)
-    outgoing.update(text=prompt, controllerThreadId=project_controller(server,path))
+    outgoing.update(text=prompt,projectPath=path,controllerThreadId=project_controller(server,path))
     def report(update):
         if isinstance(update,dict) and update.get("controllerThreadId"):
             save_project_controller(server,path,update["controllerThreadId"])

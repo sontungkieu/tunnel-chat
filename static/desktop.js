@@ -8,7 +8,7 @@ let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
 let snapshot = null, busy = false, polling = false, requestKey = "", messageKey = "";
 let refreshFailures = 0, refreshRetryAt = 0, refreshNotice = false;
 let messageImageUrls = [], imageRenderRevision = 0, pendingMediaRevision = 0, sidebarSyncAt = 0;
-let collapsedProjects = new Set(), taskReadState = {}, newProjectDraft = null, taskMenuContext = null;
+let collapsedProjects = new Set(), taskReadState = {}, newProjectDraft = null, taskMenuContext = null, listedChats = [];
 let pendingQuote = null, selectionCandidate = null, selectionTimer = 0;
 try {collapsedProjects=new Set(JSON.parse(sessionStorage.getItem("desktopCollapsedProjects") || "[]"));} catch(_error) {}
 try {
@@ -176,6 +176,7 @@ function updateControls() {
   $("prompt").disabled=unavailable || (!snapshot && !draft);
   $("reconnect").disabled=unavailable || draft;
   $("logout").disabled=busy;
+  document.getElementById("newProject").disabled=unavailable;
   document.querySelectorAll("#requests button,#requests input,#requests textarea").forEach(control=>{
     if(control.dataset.conditional) {
       const selected=control.closest(".question-other")?.querySelector('input[type="radio"]')?.checked;
@@ -235,6 +236,27 @@ function startProjectTask(group) {
   newProjectDraft={sourceChatId:active,name:group.name,path:group.path,key:group.key};
   setSidebar(false);notice();renderCreateDraft();
 }
+function projectNameFromPath(path) {
+  return String(path || "").replace(/[\\/]+$/,"").trim().split(/[\\/]/).at(-1) || "Project mới";
+}
+function newProjectSource() {
+  return listedChats.find(chat=>chat.status!=="running") || null;
+}
+function openProjectDialog() {
+  if(busy || !token)return;
+  if(!newProjectSource()){notice("Hãy kết nối hoặc chờ ít nhất một task Desktop rảnh để làm điểm điều phối tạo project.");return;}
+  $("projectPath").value="";setSidebar(false);$("projectDialog").showModal();setTimeout(()=>$("projectPath").focus(),0);
+}
+$("newProject").onclick=openProjectDialog;
+$("projectCancel").onclick=()=>$("projectDialog").close();
+$("projectDialog").onclick=event=>{if(event.target===$("projectDialog"))$("projectDialog").close();};
+$("projectForm").onsubmit=event=>{
+  event.preventDefault();
+  const path=$("projectPath").value.trim(),source=newProjectSource();
+  if(!path || !source)return;
+  active=Number(source.id);newProjectDraft={sourceChatId:active,name:projectNameFromPath(path),path,key:path.toLowerCase(),targetProjectPath:path};
+  $("projectDialog").close();notice();renderCreateDraft();
+};
 function textElement(tag,text,className) {
   const element=document.createElement(tag);element.textContent=String(text || "");
   if(className) element.className=className;return element;
@@ -683,6 +705,7 @@ window.addEventListener("resize",hideSelectionAction);
 document.addEventListener("scroll",()=>{closeTaskMenu();hideSelectionAction();},true);
 async function list() {
   const data=await rpc("list");transport=data.transport;
+  listedChats=Array.isArray(data.chats)?data.chats:[];
   $("taskList").replaceChildren();
   const groups=new Map();
   for(const chat of data.chats) {
@@ -823,7 +846,7 @@ $("composer").onsubmit=async event=>{
       sentFileBytes+=file.size;
     }
     const sendData={chat_id:chatId,mode,expectedTurnId,operation_id,attachment_ids};
-    if(draft)sendData.create=true;
+    if(draft){sendData.create=true;if(draft.targetProjectPath)sendData.project_path=draft.targetProjectPath;}
     if(mode==="start") {
       if($("modelSelect").value)sendData.model=$("modelSelect").value;
       if($("effortSelect").value)sendData.effort=$("effortSelect").value;
@@ -870,7 +893,7 @@ $("stop").onclick=async()=>{
 };
 $("logout").onclick=async()=>{
   await window.TunnelTransfer?.clearAuth().catch(()=>{});
-  sessionStorage.removeItem("tunnelChatToken");localStorage.removeItem("fixChatToken");location.reload();
+  RLCSDTransport.clearAccessToken();location.reload();
 };
 (async()=>{
   if(!token) {

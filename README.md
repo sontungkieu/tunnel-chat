@@ -142,7 +142,9 @@ same-origin service worker sends and resumes those jobs, so you can move between
 `/files`, `/codex`, and `/chat/` while an upload is running. Every page shows the
 same compact status indicator; `/files` provides retry, cancel, remove, and queue
 cleanup controls. The file blob is released when a job completes. The access
-token stays in session storage and worker memory and is not written to IndexedDB.
+token is stored in same-origin browser storage so `/files`, `/codex`, new tabs,
+and return navigation share one authenticated session until **Xóa token** is
+pressed. It remains separate from upload job data and is not written to IndexedDB.
 The public tunnel already uses HTTPS, which is required for service workers.
 
 ```bash
@@ -167,6 +169,10 @@ connecting the same task again reuses its record. To
 create another task, expand a project group and press **＋**, enter the first
 prompt, optionally select its model and effort, then send. The new native Desktop
 task is created inside that saved project and connected automatically.
+Press **＋ Project** to connect the first task for another project: enter the exact
+Windows path of a project already saved in Codex Desktop, then compose its first
+prompt. Codex Desktop currently exposes task creation inside saved projects; add a
+brand-new folder to the Desktop app first so it appears in its project list.
 
 The app retains task ownership, history, model, permissions and Dynamic runtime.
 Tunnel Chat does not copy credentials, switch Codex homes or modify app settings.
@@ -324,12 +330,12 @@ EOF
 
 `./bin/url codex` (or `codex/cli`, `queue`) puts the credential in a URL **fragment** (`#token=...`), which is
 not sent to the server. The client removes it from the address bar, stores it in
-`sessionStorage` and sends it only in the `x-chat-token` header. Old localStorage
-tokens/query links migrate once in the browser. APIs no longer authenticate with
+same-origin browser storage and sends it only in the `x-chat-token` header. This
+lets a bare `/codex` or `/files` tab reuse the authenticated browser until **Xóa
+token** is pressed. Old token keys/query links migrate once in the browser. APIs no longer authenticate with
 query tokens; replace old links because their initial query navigation still
-passes through HTTP infrastructure. Opening the bare `/codex` URL does not start
-an authenticated session: the page explains that the token is missing and keeps
-task controls disabled until it is reopened through the generated launcher URL.
+passes through HTTP infrastructure. A browser that has never opened the generated
+launcher link still shows the missing-token screen and keeps task controls disabled.
 
 Treat generated links as credentials. Use HTTPS for tunnel access. The company
 proxy must preserve the custom auth header; there is no query-token fallback.

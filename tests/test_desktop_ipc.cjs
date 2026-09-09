@@ -77,6 +77,23 @@ test('created task IDs are read from the completed Desktop dynamic tool result',
   assert.equal(createdThreadIdFromTurn({items:[{type:'dynamicToolCall',tool:'create_thread',
     success:false,contentItems:[{type:'inputText',text:JSON.stringify({threadId:child})}]}]}),null);
 });
+test('task creation can bootstrap a controller in another saved project',async()=>{
+  const controller='22222222-2222-4222-8222-222222222222';
+  const child='33333333-3333-4333-8333-333333333333',instructions=[];
+  const client=new DesktopClient();
+  client.watch=async()=>({state:sample(),revision:1});
+  client.runCreateInstruction=async(_id,instruction)=>{
+    instructions.push(instruction);return instructions.length===1?controller:child;
+  };
+  client.waitForIdle=async()=>{};
+  client.state=async()=>({threadId:child,title:'new task',cwd:'D:\\dev\\codex\\target',status:'running'});
+  const result=await client.create(ID,{projectPath:'D:\\dev\\codex\\target',text:'first prompt'});
+  client.close();
+  assert.equal(result.threadId,child);
+  assert.equal(result.controllerThreadId,controller);
+  assert.ok(instructions.every(value=>value.includes('D:\\\\dev\\\\codex\\\\target')));
+  assert.ok(!instructions.some(value=>value.includes('D:\\\\work')));
+});
 test('internal task-creation turns stay out of the projected web history',()=>{
   const s=sample();
   s.turns.push({turnId:'control',status:'completed',

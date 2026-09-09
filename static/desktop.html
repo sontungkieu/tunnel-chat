@@ -51,7 +51,8 @@
       <p class="muted small">Dán deeplink; máy Windows sẽ tự mở task khi cần.</p>
     </section>
     <section class="sidebar-section task-section">
-      <div class="section-label">Task theo project</div>
+      <div class="section-heading"><div class="section-label">Task theo project</div>
+        <button type="button" id="newProject" class="project-add">＋ Project</button></div>
       <div id="taskList" aria-label="Các task đã kết nối"></div>
     </section>
     <button id="logout" class="secondary quiet-button">Xóa token trên trình duyệt</button>
@@ -133,5 +134,15 @@
     <button type="button" role="menuitem" data-action="unlink" class="danger-text">Gỡ khỏi Tunnel Chat</button>
   </div>
   <button type="button" id="selectionAction" class="selection-action" hidden>Add to chat</button>
+  <dialog id="projectDialog" class="project-dialog">
+    <form id="projectForm" method="dialog">
+      <div><span class="eyebrow">Codex Desktop</span><h2>Thêm project mới</h2>
+        <p class="muted small">Nhập đường dẫn chính xác của project đã lưu trong Codex Desktop. Task đầu tiên sẽ được tạo khi bạn gửi prompt.</p></div>
+      <label for="projectPath">Đường dẫn project</label>
+      <input id="projectPath" required autocomplete="off" placeholder="D:\dev\codex\my-project">
+      <div class="dialog-actions"><button type="button" id="projectCancel" class="secondary">Hủy</button>
+        <button type="submit">Tiếp tục</button></div>
+    </form>
+  </dialog>
 </body>
 </html>
