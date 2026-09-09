@@ -138,6 +138,29 @@ function syncGenerationControls(state) {
   $("modelSelect").options[0].textContent=`Theo task · ${state.model || "mặc định"}`;
   $("effortSelect").options[0].textContent=`Theo task · ${state.effort || "mặc định"}`;
 }
+function formatTokens(value) {
+  const tokens=Number(value);if(!Number.isFinite(tokens) || tokens<0)return "—";
+  if(tokens>=1000000)return `${(tokens/1000000).toFixed(tokens>=10000000?0:1).replace(/\.0$/,"")}M`;
+  if(tokens>=1000)return `${(tokens/1000).toFixed(tokens>=100000?0:1).replace(/\.0$/,"")}k`;
+  return String(Math.round(tokens));
+}
+function renderContextUsage(usage) {
+  const panel=$("contextUsage");
+  if(!usage || !Number.isFinite(Number(usage.usedTokens)) || !Number.isFinite(Number(usage.contextWindowTokens))) {
+    panel.hidden=true;return;
+  }
+  const used=Math.max(0,Number(usage.usedTokens)),windowTokens=Math.max(1,Number(usage.contextWindowTokens));
+  const percent=Math.max(0,Math.min(100,Number(usage.usedPercent) || used/windowTokens*100));
+  const remaining=Math.max(0,Number(usage.remainingTokens));
+  panel.hidden=false;panel.dataset.level=percent>=90?"critical":percent>=75?"high":"normal";
+  $("contextTokens").textContent=`Context ${formatTokens(used)} / ${formatTokens(windowTokens)} · ${Math.round(percent)}% đã dùng`;
+  $("contextRemaining").textContent=`Còn ${formatTokens(remaining)}`;
+  $("contextBar").style.width=`${percent}%`;$("contextMeter").setAttribute("aria-valuenow",String(Math.round(percent)));
+  const count=Math.max(0,Math.round(Number(usage.compactionCount) || 0));
+  $("contextCompaction").textContent=usage.compacting ? "Codex đang compact context…"
+    : `${count?`Đã compact ${count} lần · `:""}Mốc compact tiếp theo do Codex tự quyết định`;
+  panel.title=`Context của lượt gần nhất. Tổng token lũy kế: ${formatTokens(usage.cumulativeTokens)}. Desktop IPC không công bố compact threshold.`;
+}
 initializeGenerationControls();
 function updateControls() {
   const unavailable=busy || !token,draft=!!newProjectDraft;
@@ -192,7 +215,7 @@ async function waitForCreate(createId) {
   } catch(error) {setChatLoading(false);throw error;}
 }
 function renderCreateDraft() {
-  snapshot=null;messageKey="";requestKey="";pendingMediaRevision=0;imageRenderRevision+=1;setChatLoading(false);releaseMessageImages();clearPendingQuote();hideSelectionAction();
+  snapshot=null;messageKey="";requestKey="";pendingMediaRevision=0;imageRenderRevision+=1;setChatLoading(false);releaseMessageImages();clearPendingQuote();hideSelectionAction();renderContextUsage(null);
   $("title").textContent="Task mới";
   $("meta").textContent=`Project: ${newProjectDraft.name} · ${newProjectDraft.path} · Desktop · local`;
   updateActivity("idle","Soạn yêu cầu đầu tiên");
@@ -387,6 +410,7 @@ function toolCard(message) {
 function renderState(state) {
   snapshot=state;
   syncGenerationControls(state);
+  renderContextUsage(state.contextUsage);
   $("title").textContent=state.title;
   const project=state.project || (state.cwd || "").replace(/[\\/]+$/,"").split(/[\\/]/).at(-1);
   $("meta").textContent=[project?`Project: ${project}`:"Project: chưa xác định",state.model,state.cwd,"Desktop · local"].filter(Boolean).join(" · ");
@@ -598,7 +622,7 @@ function openTaskMenu(event,chat,group,trigger) {
   menu.querySelector("button")?.focus();
 }
 function clearSelectedTask() {
-  active=0;snapshot=null;newProjectDraft=null;messageKey="";requestKey="";
+  active=0;snapshot=null;newProjectDraft=null;messageKey="";requestKey="";renderContextUsage(null);
   pendingMediaRevision=0;imageRenderRevision+=1;setChatLoading(false);
   sessionStorage.removeItem("desktopActiveChat");releaseMessageImages();clearPendingQuote();hideSelectionAction();
   $("title").textContent="Chọn một task";$("meta").textContent="";
@@ -613,7 +637,7 @@ async function selectChat(chat,force=false) {
   closeTaskMenu();setSidebar(false);pendingMediaRevision=0;imageRenderRevision+=1;setChatLoading(false);
   clearPendingQuote();hideSelectionAction();setBusy(true);notice();
   active=Number(chat.id);newProjectDraft=null;sessionStorage.setItem("desktopActiveChat",String(active));
-  snapshot=null;messageKey="";requestKey="";$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
+  snapshot=null;messageKey="";requestKey="";renderContextUsage(null);$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
   updateControls();
   try {await list();await refresh(force);}
   catch(e) {notice(e.message);}

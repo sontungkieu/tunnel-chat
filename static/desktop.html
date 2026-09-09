@@ -48,7 +48,7 @@
         <input id="thread" placeholder="codex://threads/…" required autocomplete="off">
         <button type="button" id="linkButton">Kết nối</button>
       </form>
-      <p class="muted small">Mở task trong app Windows trước khi kết nối.</p>
+      <p class="muted small">Dán deeplink; máy Windows sẽ tự mở task khi cần.</p>
     </section>
     <section class="sidebar-section task-section">
       <div class="section-label">Task theo project</div>
@@ -62,7 +62,15 @@
         aria-controls="sidebar" aria-expanded="false" aria-label="Mở danh sách task">
         <span aria-hidden="true">☰</span>
       </button>
-      <div class="task-heading"><span class="eyebrow">Task hiện tại</span><h2 id="title">Chọn một task</h2><div id="meta" class="muted"></div></div>
+      <div class="task-heading">
+        <span class="eyebrow">Task hiện tại</span><h2 id="title">Chọn một task</h2><div id="meta" class="muted"></div>
+        <div id="contextUsage" class="context-usage" hidden>
+          <div class="context-usage-copy"><span id="contextTokens">Context</span><strong id="contextRemaining"></strong></div>
+          <div id="contextMeter" class="context-meter" role="progressbar" aria-label="Dung lượng context đã dùng"
+            aria-valuemin="0" aria-valuemax="100"><span id="contextBar"></span></div>
+          <div id="contextCompaction" class="context-compaction muted"></div>
+        </div>
+      </div>
       <div class="header-actions">
         <details id="activityPanel" class="activity-panel" open>
           <summary><span class="status-dot" aria-hidden="true"></span><span id="status" aria-live="polite">Chưa kết nối</span><span class="chevron" aria-hidden="true"></span></summary>

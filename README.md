@@ -195,6 +195,11 @@ values remain metadata and are never resolved as Linux paths.
   on **Theo task** to inherit the task's current setting. The controls are locked
   while steering an active turn. Codex Desktop still enforces model availability
   for the signed-in account.
+- The task header shows the latest context token count, model context window,
+  remaining tokens, cumulative compaction count and live compaction state from
+  the Desktop snapshot. Codex Desktop does not expose its next automatic compact
+  threshold, so the page labels that boundary as runtime-managed instead of
+  guessing a percentage.
 - Stop uses the exact displayed active turn ID. It never kills the shared app.
 - Command/file approvals can be reviewed and answered remotely. The page shows
   only the exact choices advertised by Codex Desktop: one-time approval,

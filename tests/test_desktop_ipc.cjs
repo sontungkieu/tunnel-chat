@@ -124,6 +124,19 @@ test('projected history stays bounded to the latest 600 messages',()=>{
   assert.equal(view.messages.at(-1).text,'message-699');
   assert.equal(view.historyTruncated,true);
 });
+test('context usage and compactions are projected without inventing a threshold',()=>{
+  const s=sample();
+  s.latestTokenUsageInfo={last:{totalTokens:150000},total:{totalTokens:525000},modelContextWindow:200000};
+  s.turns[0].items.push({type:'contextCompaction',id:'compact-1',completed:true,source:'auto'});
+  assert.deepEqual(projectState(s,2).contextUsage,{
+    usedTokens:150000,contextWindowTokens:200000,remainingTokens:50000,usedPercent:75,
+    cumulativeTokens:525000,compactionCount:1,compacting:false,
+  });
+  s.turns[0].status='inProgress';s.turns[0].items.push({type:'contextCompaction',id:'compact-2'});
+  const active=projectState(s,3).contextUsage;
+  assert.equal(active.compactionCount,2);assert.equal(active.compacting,true);
+  assert.equal(Object.hasOwn(active,'compactThreshold'),false);
+});
 async function fixture(t) {
   let state=sample(),owner='owner',silent=false,denyInitialize=false,noClientCount=0,connectFailures=0;
   const seen=[],sockets=new Set(),opened=[];

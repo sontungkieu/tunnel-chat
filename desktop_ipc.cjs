@@ -286,7 +286,7 @@ function taskSummary(state, revision) {
 function projectState(state, revision) {
   if (!state || typeof state.id !== 'string') throw Error('Unsupported desktop state');
   const turns = turnsOf(state);
-  const messages = [];let messageCount=0;
+  const messages = [];let messageCount=0,compactionCount=0,compacting=false;
   const addMessage=message=>{
     messageCount+=1;
     if(messages.length===MAX_PROJECTED_MESSAGES)messages.shift();
@@ -300,6 +300,11 @@ function projectState(state, revision) {
     if ((turnUser.text || turnUser.images.length) && !hasCanonicalUser)
       addMessage({id:turn.turnId+':user',role:'user',...turnUser});
     for (const item of turn.items || []) {
+      if (item.type === 'contextCompaction') {
+        compactionCount+=1;
+        if (turn.status==='inProgress' && item.completed!==true) compacting=true;
+        continue;
+      }
       // Do not export reasoning, ambient context, configuration, or arbitrary tool payloads.
       if (item.type === 'agentMessage' || item.type === 'assistantMessage')
         addMessage({id:item.id,role:'assistant',text:item.text || '',phase:item.phase || ''});
@@ -315,11 +320,23 @@ function projectState(state, revision) {
   const latest=turns.at(-1),visible=turns.filter(turn=>!isControlTurn(turn));
   const summary=taskSummaryFromTurns(state,visible.length ? visible : turns,revision);
   const project=projectOf(state,latest);
+  const tokenInfo=state.latestTokenUsageInfo || {},lastUsage=tokenInfo.last || {};
+  const usedTokens=Number(lastUsage.totalTokens),contextWindowTokens=Number(tokenInfo.modelContextWindow);
+  const cumulativeTokens=Number(tokenInfo.total?.totalTokens);
+  const contextUsage=Number.isFinite(usedTokens) && usedTokens>=0 &&
+    Number.isFinite(contextWindowTokens) && contextWindowTokens>0 ? {
+      usedTokens:Math.round(usedTokens),contextWindowTokens:Math.round(contextWindowTokens),
+      remainingTokens:Math.max(0,Math.round(contextWindowTokens-usedTokens)),
+      usedPercent:Math.max(0,Math.min(100,Number((usedTokens/contextWindowTokens*100).toFixed(1)))),
+      cumulativeTokens:Number.isFinite(cumulativeTokens) && cumulativeTokens>=0 ? Math.round(cumulativeTokens) : null,
+      compactionCount,compacting,
+    } : null;
   return {threadId:state.id,title:state.title || state.generatedTitle || state.id,
     cwd:state.cwd || '',backend:'desktop',hostId:'local',
     project:project.project,projectPath:project.projectPath,
     model:state.latestModel || '',
     effort:state.latestThreadSettings?.effort || state.latestReasoningEffort || null,...summary,
+    contextUsage,
     messages,
     requests:(state.requests || []).map(r=>({id:r.id,method:r.method,params:r.params})),
     historyTruncated:messageCount>MAX_PROJECTED_MESSAGES};
