@@ -65,17 +65,26 @@ function decodePayload(url) {
   return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
 }
 
-test("service worker persists a waiting upload and resumes it after authentication", async () => {
+test("service worker persists file and note jobs then resumes them after authentication", async () => {
   const job = {
     id: "job-1", name: "sample.txt", mimeType: "text/plain", size: 10,
     directory: "notes", blob: new Blob(["abcdefghij"]), state: "queued",
     progress: 0, receivedBytes: 0, detail: "Đang chờ upload", error: "",
     result: null, uploadId: null, createdAt: 1, updatedAt: 1,
   };
-  const database = fakeIndexedDb([job]);
+  const noteText = "ghi chú Unicode ✓";
+  const noteJob = {
+    id: "job-2", kind: "note", name: "Ghi chú thử", title: "Ghi chú thử",
+    mimeType: "text/plain;charset=utf-8", size: Buffer.byteLength(noteText), directory: "",
+    blob: new Blob([noteText]), state: "queued", progress: 0, receivedBytes: 0,
+    detail: "Đang chờ gửi note", error: "", result: null, uploadId: null,
+    createdAt: 2, updatedAt: 2,
+  };
+  const database = fakeIndexedDb([job, noteJob]);
   const events = new Map();
   const clientMessages = [];
   const chunks = new Map();
+  const noteChunks = new Map();
   const requests = [];
   const self = {
     clients: {
@@ -91,16 +100,32 @@ test("service worker persists a waiting upload and resumes it after authenticati
     fetch: async (url, options = {}) => {
       const payload = decodePayload(url);
       requests.push({url, options, payload});
+      if (url.startsWith("/f/note/upload/start")) {
+        assert.equal(payload.title, "Ghi chú thử");
+        assert.equal(payload.total_chunks, Math.ceil(Buffer.byteLength(noteText) / 4));
+        return Response.json({ok: true, upload_id: 8});
+      }
       if (url.startsWith("/f/upload/start")) {
         assert.equal(payload.total_chunks, 3);
         return Response.json({ok: true, upload_id: 7});
       }
+      if (url.startsWith("/f/note/upload/status")) {
+        const indexes = Array.from({length: Math.ceil(Buffer.byteLength(noteText) / 4)}, (_, index) => index);
+        return Response.json({missing: indexes.filter(index => !noteChunks.has(index))});
+      }
       if (url.startsWith("/f/upload/status")) {
         return Response.json({missing: [0, 1, 2].filter(index => !chunks.has(index))});
+      }
+      if (url.startsWith("/f/note/upload/chunk")) {
+        noteChunks.set(payload.chunk_index, Buffer.from(payload.body, "base64url"));
+        return Response.json({ok: true});
       }
       if (url.startsWith("/f/upload/chunk")) {
         chunks.set(payload.chunk_index, Buffer.from(payload.body, "base64url"));
         return Response.json({ok: true});
+      }
+      if (url.startsWith("/f/note/upload/finish")) {
+        return Response.json({note: {id: 3, title: "Ghi chú thử", size: Buffer.byteLength(noteText)}});
       }
       if (url.startsWith("/f/upload/finish")) {
         return Response.json({file: {path: "notes/sample.txt"}});
@@ -130,6 +155,12 @@ test("service worker persists a waiting upload and resumes it after authenticati
   assert.equal(completed.blob, null);
   assert.equal(completed.result.path, "notes/sample.txt");
   assert.equal(Buffer.concat([...chunks.entries()].sort(([a], [b]) => a - b).map(([, value]) => value)).toString(), "abcdefghij");
+  const completedNote = database.records.get(noteJob.id);
+  assert.equal(completedNote.state, "complete");
+  assert.equal(completedNote.blob, null);
+  assert.equal(completedNote.result.title, "Ghi chú thử");
+  assert.equal(Buffer.concat([...noteChunks.entries()].sort(([a], [b]) => a - b).map(([, value]) => value)).toString(), noteText);
+  assert.ok(requests.some(request => request.url.startsWith("/f/note/upload/finish")));
   assert.ok(requests.every(request => request.options.headers["x-chat-token"] === "test-secret"));
   assert.ok(!JSON.stringify(completed).includes("test-secret"));
   assert.ok(clientMessages.some(message => message.job?.state === "complete"));

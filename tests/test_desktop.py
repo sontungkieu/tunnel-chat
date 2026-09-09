@@ -286,7 +286,10 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(get("/")[0],302)
             for path in ("/codex", "/codex/cli", "/queue"):
                 self.assertEqual(get(path)[0],200)
-            self.assertEqual(get("/files")[0],200)
+            files_code,files_body,_=get("/files")
+            self.assertEqual(files_code,200)
+            self.assertIn(b'id="noteForm"',files_body)
+            self.assertIn(b'id="notesList"',files_body)
             self.assertEqual(get("/f/config")[0],401)
             self.assertIn(b'href="/chat/"', get("/codex")[1])
             self.assertIn(b'type="button" id="linkButton"', get("/codex")[1])

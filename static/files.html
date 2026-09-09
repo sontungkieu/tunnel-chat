@@ -62,11 +62,29 @@
           <div class="browser-toolbar"><button type="button" id="up" class="secondary">← Thư mục cha</button><code id="currentPath">/</code></div>
           <div id="fileList" class="file-list" aria-label="File trên máy cá nhân"></div>
         </section>
+        <section class="card notes-card">
+          <div class="card-heading"><div><p class="eyebrow">Clipboard → máy cá nhân</p><h2>Clipboard notes</h2></div>
+            <button type="button" id="refreshNotes" class="icon-button" aria-label="Làm mới clipboard notes">↻</button></div>
+          <div class="notes-layout">
+            <form id="noteForm" class="note-form">
+              <label for="noteTitle">Tên note (không bắt buộc)</label>
+              <input id="noteTitle" maxlength="120" placeholder="Tự lấy từ dòng đầu nếu để trống" autocomplete="off">
+              <label for="noteBody">Nội dung clipboard</label>
+              <textarea id="noteBody" rows="9" required placeholder="Dán nội dung vào đây…"></textarea>
+              <div class="note-compose-footer"><span id="noteCounter" class="muted">0 B</span><div>
+                <button type="button" id="pasteClipboard" class="secondary">Dán clipboard</button>
+                <button type="submit" id="sendNote" class="primary">Gửi note</button>
+              </div></div>
+            </form>
+            <div id="notesList" class="notes-list" aria-label="Clipboard notes đã lưu"><div class="empty">Chưa có note.</div></div>
+          </div>
+        </section>
+
         <section class="card queue-card">
-          <div class="card-heading"><div><p class="eyebrow">Dùng chung giữa các trang</p><h2>Hàng đợi upload</h2></div>
+          <div class="card-heading"><div><p class="eyebrow">Dùng chung giữa các trang</p><h2>Hàng đợi gửi</h2></div>
             <button type="button" id="clearFinished" class="secondary">Dọn job đã xong</button></div>
-          <p class="muted queue-help">Bạn có thể chuyển sang ChatGPT hoặc Codex; queue này vẫn tiếp tục và trạng thái sẽ hiện ở góc màn hình.</p>
-          <div id="transferJobs" class="transfer-jobs"><div class="empty">Chưa có upload nền.</div></div>
+          <p class="muted queue-help">File và clipboard note dùng chung queue. Bạn có thể chuyển sang ChatGPT hoặc Codex; queue vẫn tiếp tục và trạng thái sẽ hiện ở góc màn hình.</p>
+          <div id="transferJobs" class="transfer-jobs"><div class="empty">Chưa có tác vụ nền.</div></div>
         </section>
       </div>
     </div>

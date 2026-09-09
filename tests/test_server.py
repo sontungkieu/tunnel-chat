@@ -139,6 +139,27 @@ class ServerTestCase(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Symbolic links"):
                 server.downloadable_transfer_file("linked-dir/secret.txt")
 
+    def test_clipboard_notes_use_chunked_utf8_preview_and_delete(self) -> None:
+        body = ("Dòng clipboard dài có Unicode ✓\n" * 150).strip()
+        data = body.encode("utf-8")
+        total_chunks = server.expected_upload_chunks(len(data))
+        upload_id = server.create_clipboard_note_upload("  Ghi   chú thử  ", len(data), total_chunks)
+        for index in reversed(range(total_chunks)):
+            chunk = data[index * server.upload_chunk_bytes() : (index + 1) * server.upload_chunk_bytes()]
+            server.add_clipboard_note_chunk(upload_id, index, encode_chunk(chunk))
+        self.assertEqual(server.get_upload_status("note", upload_id)["missing"], [])
+        created = server.finish_clipboard_note_upload(upload_id)
+        self.assertEqual(created["title"], "Ghi chú thử")
+        listing = server.list_clipboard_notes()
+        self.assertEqual(listing[0]["id"], created["id"])
+        self.assertNotIn("body", listing[0])
+        self.assertLessEqual(len(listing[0]["preview"]), 280)
+        self.assertEqual(server.get_clipboard_note(created["id"])["body"], body)
+        server.delete_clipboard_note(created["id"])
+        self.assertEqual(server.list_clipboard_notes(), [])
+        with self.assertRaisesRegex(ValueError, "unknown clipboard note"):
+            server.get_clipboard_note(created["id"])
+
     def test_prompt_upload_uses_utf8_bytes_and_starts_one_turn(self) -> None:
         chat_id = self.create_chat()
         prompt = "Loi CUDA tieng Viet\n" * 500

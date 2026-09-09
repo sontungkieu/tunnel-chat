@@ -122,7 +122,7 @@ run `./bin/chat-web-login` for local manual sign-in with streaming paused. After
 signing in, close that window and run `./bin/chat-web-start`; see the component
 guide for details.
 
-## Bidirectional file transfer
+## Bidirectional file and clipboard transfer
 
 `/files` is a standalone page protected by the Codex access token. By default it
 maps only `D:\dev\codex\vai` on the personal Windows machine. From a company
@@ -131,7 +131,11 @@ directory, browse its folders, or enter a relative/full Windows path inside the
 root and download a file to the current device. Uploads use the same resumable
 small-chunk transport used for long prompts. Existing files are never overwritten;
 a numeric suffix is added on name collisions. Parent traversal, paths outside the
-configured root, and symbolic links are rejected.
+configured root, and symbolic links are rejected. Clipboard notes on the same
+page accept pasted text, keep a scrollable preview list, and support expand,
+copy, `.txt` download, and individual deletion. Long notes use the same small
+resumable chunks; list refreshes return only previews and fetch a full note on
+demand.
 
 Selected uploads are first saved as persistent browser jobs in IndexedDB. A
 same-origin service worker sends and resumes those jobs, so you can move between

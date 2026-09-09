@@ -117,8 +117,12 @@ async function uploadJob(job, resetAttempts = 0) {
   try {
     await update(job, {state: "uploading", error: "", detail: "Đang chuẩn bị upload"});
     const totalChunks = Math.max(1, Math.ceil(job.size / runtime.chunkBytes));
+    const isNote = job.kind === "note";
+    const uploadPath = isNote ? "note/upload" : "upload";
     if (!job.uploadId) {
-      const started = await rpc("upload/start", {
+      const started = await rpc(`${uploadPath}/start`, isNote ? {
+        title: job.title, size: job.size, total_chunks: totalChunks, body_encoding: "base64url",
+      } : {
         directory: job.directory, filename: job.name, mime_type: job.mimeType,
         size: job.size, total_chunks: totalChunks, body_encoding: "base64url",
       }, 1);
@@ -126,9 +130,9 @@ async function uploadJob(job, resetAttempts = 0) {
       await putJob(job);
     }
     let status;
-    try { status = await rpc("upload/status", {upload_id: job.uploadId}); }
+    try { status = await rpc(`${uploadPath}/status`, {upload_id: job.uploadId}); }
     catch (error) {
-      if (/unknown file upload/i.test(error.message)) {
+      if (/unknown (?:file|note) upload/i.test(error.message)) {
         if (resetAttempts >= 1) throw error;
         job.uploadId = null; await putJob(job); return await uploadJob(job, resetAttempts + 1);
       }
@@ -143,7 +147,7 @@ async function uploadJob(job, resetAttempts = 0) {
         const latest = await getJob(job.id);
         if (!latest || latest.state === "cancelled") throw new Error("cancelled");
         const offset = chunkIndex * runtime.chunkBytes;
-        await rpc("upload/chunk", {
+        await rpc(`${uploadPath}/chunk`, {
           upload_id: job.uploadId, chunk_index: chunkIndex,
           body: await blobToBase64Url(job.blob.slice(offset, offset + runtime.chunkBytes)),
         });
@@ -156,15 +160,16 @@ async function uploadJob(job, resetAttempts = 0) {
           detail: `${progressSnapshot}/${totalChunks} phần`}));
         await progressChain;
       });
-      status = await rpc("upload/status", {upload_id: job.uploadId});
+      status = await rpc(`${uploadPath}/status`, {upload_id: job.uploadId});
     }
     if (status.missing?.length) throw new Error(`Upload còn thiếu ${status.missing.length} phần`);
     const latest = await getJob(job.id);
     if (!latest || latest.state === "cancelled") return true;
     await update(job, {state: "finishing", progress: 100, detail: "Đang hoàn tất trên máy cá nhân"});
-    const finished = await rpc("upload/finish", {upload_id: job.uploadId}, 1);
+    const finished = await rpc(`${uploadPath}/finish`, {upload_id: job.uploadId}, 1);
+    const result = isNote ? finished.note : finished.file;
     await update(job, {state: "complete", progress: 100, receivedBytes: job.size,
-      result: finished.file, detail: finished.file?.path || job.name, blob: null});
+      result, detail: result?.path || result?.title || job.name, blob: null});
     return true;
   } catch (error) {
     if (error.message === "cancelled") return true;

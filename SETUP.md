@@ -75,8 +75,9 @@ Tunnel và lưu launcher URL mà không đưa token vào câu trả lời của 
   Có thể đổi `FILE_TRANSFER_ROOT` và `FILE_TRANSFER_MAX_BYTES` trong
   `.env.local`; giới hạn upload mặc định là 32 MiB mỗi file. File đã chọn được
   giữ trong hàng đợi IndexedDB và service worker tiếp tục/resume khi chuyển giữa
-  `/files`, `/codex` và `/chat/`. Trình duyệt phải mở qua HTTPS (named/Quick
-  Tunnel) hoặc localhost để dùng service worker.
+  `/files`, `/codex` và `/chat/`. Cùng trang có Clipboard notes: dán nội dung,
+  gửi nền, mở/sao chép/tải `.txt` hoặc xóa từng note. Trình duyệt phải mở qua
+  HTTPS (named/Quick Tunnel) hoặc localhost để dùng service worker.
 
 ## Vận hành
 

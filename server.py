@@ -51,6 +51,7 @@ DEFAULT_FILE_TRANSFER_ROOT = r"D:\dev\codex\vai"
 DEFAULT_FILE_TRANSFER_MAX_BYTES = 32 * 1024 * 1024
 MIN_FILE_TRANSFER_MAX_BYTES = 1024 * 1024
 MAX_FILE_TRANSFER_MAX_BYTES = 128 * 1024 * 1024
+MAX_CLIPBOARD_NOTE_BYTES = 4 * 1024 * 1024
 MAX_QUEUE_UPLOAD_BYTES = 4 * 1024 * 1024
 MAX_CODEX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 MAX_CODEX_PROMPT_BYTES = 4 * 1024 * 1024
@@ -430,6 +431,38 @@ def connect() -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clipboard_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            size INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clipboard_note_uploads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            title TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            total_chunks INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clipboard_note_chunks (
+            upload_id INTEGER NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            body TEXT NOT NULL,
+            PRIMARY KEY (upload_id, chunk_index)
+        )
+        """
+    )
     try:
         conn.execute("ALTER TABLE codex_prompt_uploads ADD COLUMN attachment_ids TEXT")
     except sqlite3.OperationalError as exc:
@@ -525,6 +558,7 @@ UPLOAD_TABLES = {
     "attachment": ("codex_attachment_uploads", "codex_attachment_chunks"),
     "prompt": ("codex_prompt_uploads", "codex_prompt_chunks"),
     "file": ("file_uploads", "file_upload_chunks"),
+    "note": ("clipboard_note_uploads", "clipboard_note_chunks"),
 }
 
 
@@ -1267,6 +1301,110 @@ def finish_file_upload(upload_id: int) -> dict[str, object]:
     relative = target.relative_to(file_transfer_root()).as_posix()
     return {"path": relative, "name": target.name, "size": written,
             "mime_type": str(session["mime_type"])}
+
+
+def clipboard_note_title(title: str, body: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(title or "").strip())
+    if not normalized:
+        normalized = re.sub(r"\s+", " ", body.strip()[:1000].split("\n", 1)[0]).strip()
+    return normalized[:120] or "Ghi chú không tiêu đề"
+
+
+def create_clipboard_note_upload(title: str, size: int, total_chunks: int) -> int:
+    validate_upload_shape(int(size), int(total_chunks), MAX_CLIPBOARD_NOTE_BYTES, "clipboard note")
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO clipboard_note_uploads(created_at, title, size, total_chunks)
+            VALUES (?, ?, ?, ?)
+            """,
+            (now_iso(), str(title or "")[:500], int(size), int(total_chunks)),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def add_clipboard_note_chunk(upload_id: int, chunk_index: int, body: str) -> None:
+    with connect() as conn:
+        session = conn.execute(
+            "SELECT size, total_chunks FROM clipboard_note_uploads WHERE id = ?", (upload_id,)
+        ).fetchone()
+        if session is None:
+            raise ValueError(f"unknown note upload #{upload_id}")
+        total_chunks = int(session["total_chunks"])
+        if chunk_index < 0 or chunk_index >= total_chunks:
+            raise ValueError(f"chunk_index must be between 0 and {total_chunks - 1}")
+        validate_base64url_chunk(body, chunk_index, int(session["size"]), total_chunks)
+        conn.execute(
+            "INSERT OR REPLACE INTO clipboard_note_chunks(upload_id, chunk_index, body) VALUES (?, ?, ?)",
+            (upload_id, int(chunk_index), body),
+        )
+        conn.commit()
+
+
+def finish_clipboard_note_upload(upload_id: int) -> dict[str, object]:
+    with connect() as conn:
+        session = conn.execute(
+            "SELECT title, size, total_chunks FROM clipboard_note_uploads WHERE id = ?", (upload_id,)
+        ).fetchone()
+        if session is None:
+            raise ValueError(f"unknown note upload #{upload_id}")
+        chunks = conn.execute(
+            "SELECT chunk_index, body FROM clipboard_note_chunks WHERE upload_id = ? ORDER BY chunk_index",
+            (upload_id,),
+        ).fetchall()
+        if len(chunks) != int(session["total_chunks"]):
+            raise ValueError(f"note upload #{upload_id} has {len(chunks)}/{session['total_chunks']} chunks")
+        data = b"".join(decode_base64url_chunk(str(row["body"])) for row in chunks)
+        if len(data) != int(session["size"]):
+            raise ValueError(f"note upload #{upload_id} size mismatch")
+        try:
+            body = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("clipboard note must be valid UTF-8") from exc
+        if not body.strip():
+            raise ValueError("clipboard note must not be empty")
+        title = clipboard_note_title(str(session["title"]), body)
+        cursor = conn.execute(
+            "INSERT INTO clipboard_notes(created_at, title, body, size) VALUES (?, ?, ?, ?)",
+            (now_iso(), title, body, len(data)),
+        )
+        note_id = int(cursor.lastrowid)
+        conn.execute("DELETE FROM clipboard_note_chunks WHERE upload_id = ?", (upload_id,))
+        conn.execute("DELETE FROM clipboard_note_uploads WHERE id = ?", (upload_id,))
+        conn.commit()
+    return {"id": note_id, "title": title, "size": len(data)}
+
+
+def list_clipboard_notes(limit: int = 200) -> list[dict[str, object]]:
+    bounded = max(1, min(500, int(limit)))
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, created_at, title, size, substr(body, 1, 280) AS preview
+            FROM clipboard_notes ORDER BY id DESC LIMIT ?
+            """,
+            (bounded,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_clipboard_note(note_id: int) -> dict[str, object]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id, created_at, title, body, size FROM clipboard_notes WHERE id = ?", (note_id,)
+        ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown clipboard note #{note_id}")
+    return dict(row)
+
+
+def delete_clipboard_note(note_id: int) -> None:
+    with connect() as conn:
+        cursor = conn.execute("DELETE FROM clipboard_notes WHERE id = ?", (note_id,))
+        conn.commit()
+    if cursor.rowcount != 1:
+        raise ValueError(f"unknown clipboard note #{note_id}")
 
 
 def downloadable_transfer_file(value: str) -> tuple[Path, str, str]:
@@ -3631,6 +3769,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                     self.send_json({
                         "root": file_transfer_root_label(),
                         "max_file_bytes": file_transfer_max_bytes(),
+                        "max_note_bytes": MAX_CLIPBOARD_NOTE_BYTES,
                         "transport": {
                             "chunkBytes": upload_chunk_bytes(),
                             "concurrency": upload_concurrency(),
@@ -3640,6 +3779,36 @@ class ChatHandler(BaseHTTPRequestHandler):
                     return
                 if file_path == "list":
                     self.send_json(list_transfer_files(str(payload.get("path") or "")))
+                    return
+                if file_path == "note/list":
+                    self.send_json({"notes": list_clipboard_notes(int(payload.get("limit") or 200))})
+                    return
+                if file_path == "note/get":
+                    self.send_json({"note": get_clipboard_note(int(payload.get("note_id") or 0))})
+                    return
+                if file_path == "note/delete":
+                    delete_clipboard_note(int(payload.get("note_id") or 0))
+                    self.send_json({"ok": True})
+                    return
+                if file_path == "note/upload/start":
+                    upload_id = create_clipboard_note_upload(
+                        str(payload.get("title") or ""), int(payload.get("size") or 0),
+                        int(payload.get("total_chunks") or 0),
+                    )
+                    self.send_json({"ok": True, "upload_id": upload_id})
+                    return
+                if file_path == "note/upload/chunk":
+                    add_clipboard_note_chunk(
+                        int(payload.get("upload_id") or 0), int(payload.get("chunk_index") or 0),
+                        str(payload.get("body") or ""),
+                    )
+                    self.send_json({"ok": True})
+                    return
+                if file_path == "note/upload/status":
+                    self.send_json(get_upload_status("note", int(payload.get("upload_id") or 0)))
+                    return
+                if file_path == "note/upload/finish":
+                    self.send_json({"ok": True, "note": finish_clipboard_note_upload(int(payload.get("upload_id") or 0))})
                     return
                 if file_path == "upload/start":
                     upload_id = create_file_upload(
