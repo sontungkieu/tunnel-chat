@@ -363,7 +363,7 @@ class DesktopClient extends EventEmitter {
     for (const {reject,timer} of this.pending.values()) {clearTimeout(timer);reject(error);}
     this.pending.clear();
     for (const task of this.tasks.values()) {task.error=error.message;task.state=null;}
-    this.tasks.clear();this.tracking.clear();this.openedThreads.clear();
+    this.tasks.clear();this.tracking.clear();
     this.emit('change');
   }
   send(message) {
@@ -446,14 +446,30 @@ class DesktopClient extends EventEmitter {
       throw error;
     }
   }
+  async openTask(id,onProgress=()=>{}) {
+    onProgress({stage:'opening-task'});
+    const now=Date.now(),last=this.openedThreads.get(id) || 0;
+    if (now-last<30000) return;
+    await this.openThread(id);this.openedThreads.set(id,now);
+  }
+  async connectForTask(id,onProgress=()=>{}) {
+    try {await this.connect();return;}
+    catch(firstError) {
+      await this.openTask(id,onProgress);
+      onProgress({stage:'waiting-owner'});
+      const deadline=Date.now()+this.ownerWaitMs;
+      let lastError=firstError;
+      while(Date.now()<deadline) {
+        await new Promise(resolve=>setTimeout(resolve,this.ownerRetryMs));
+        try {await this.connect();return;} catch(error) {lastError=error;}
+      }
+      throw Error(`Codex Desktop did not start after opening the task deeplink: ${lastError.message}`);
+    }
+  }
   async ownerFor(id,onProgress=()=>{}) {
     let discovery=await this.discoverOwner(id);
     if (discovery) return discovery;
-    onProgress({stage:'opening-task'});
-    const now=Date.now(),last=this.openedThreads.get(id) || 0;
-    if (now-last>=30000) {
-      await this.openThread(id);this.openedThreads.set(id,now);
-    }
+    await this.openTask(id,onProgress);
     onProgress({stage:'waiting-owner'});
     const deadline=Date.now()+this.ownerWaitMs;
     while(Date.now()<deadline) {
@@ -477,7 +493,7 @@ class DesktopClient extends EventEmitter {
   async watch(id, refresh=false, onProgress=()=>{}) {
     if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) throw Error('Invalid task ID');
     onProgress({stage:'connecting'});
-    await this.connect();
+    await this.connectForTask(id,onProgress);
     if (this.tracking.has(id)) await this.tracking.get(id);
     let task=this.tasks.get(id);
     if (task?.state && task.historyLoaded && !refresh) {onProgress({stage:'cached'});return task;}
