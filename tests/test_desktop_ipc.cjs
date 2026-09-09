@@ -191,6 +191,13 @@ test('sidebar summaries follow tasks without loading full history',async t=>{
   assert.equal(f.seen.filter(message=>message.method==='thread-follower-load-complete-history').length,1);
 });
 
+test('state returns a compact unchanged marker for the current revision',async t=>{
+  const f=await fixture(t);
+  const first=await f.client.state(ID);
+  assert.deepEqual(await f.client.state(ID,false,()=>{},first.revision),
+    {unchanged:true,revision:first.revision});
+});
+
 test('cancel carries exact active turn; stale stop and implicit steering are rejected',async t=>{
   const f=await fixture(t),s=sample();s.threadRuntimeStatus={type:'active'};s.turns[0].status='inProgress';f.setState(s);
   await f.client.state(ID);

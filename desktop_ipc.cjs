@@ -473,8 +473,11 @@ class DesktopClient extends EventEmitter {
     if (!task.state) throw Error(task.error || 'Desktop snapshot unavailable');
     return task;
   }
-  async state(id, refresh=false, onProgress=()=>{}) {
-    const task=await this.watch(id,refresh,onProgress);onProgress({stage:'projecting'});
+  async state(id, refresh=false, onProgress=()=>{}, sinceRevision=null) {
+    const task=await this.watch(id,refresh,onProgress);
+    if (!refresh && Number.isInteger(sinceRevision) && task.revision===sinceRevision)
+      return {unchanged:true,revision:task.revision};
+    onProgress({stage:'projecting'});
     return projectState(task.state,task.revision);
   }
   async act(id, action, data) {
@@ -654,7 +657,8 @@ async function main() {
         if (command.action==='stage') result=stageAttachment(command.data);
         else if (command.action==='summaries') result=client.summaries(command.data?.threadIds);
         else if (command.action==='state') result=await client.state(command.threadId,!!command.refresh,
-          progress=>process.stdout.write(JSON.stringify({id:command.id,progress})+'\n'));
+          progress=>process.stdout.write(JSON.stringify({id:command.id,progress})+'\n'),
+          command.data?.sinceRevision);
         else if (command.action==='create') result=await client.create(command.threadId,command.data || {},
           progress=>process.stdout.write(JSON.stringify({id:command.id,progress})+'\n'));
         else result=await client.act(command.threadId,command.action,command.data || {});

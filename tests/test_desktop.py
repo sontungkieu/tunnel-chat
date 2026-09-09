@@ -98,6 +98,16 @@ class DesktopTests(unittest.TestCase):
         call.assert_called_once_with({"desktop_enabled":"1"},"summaries",
             data={"threadIds":[row["codex_session_id"]]},timeout=5)
 
+    def test_state_forwards_revision_and_returns_compact_unchanged_result(self):
+        chat=self.chat();row=server.get_codex_chat(chat)
+        unchanged={"unchanged":True,"revision":17}
+        with mock.patch.object(server,"load_config",return_value={"desktop_enabled":"1"}), \
+             mock.patch.object(desktop.BRIDGE,"call",return_value=unchanged) as call:
+            result=desktop.dispatch(server,"state",{"chat_id":chat,"since_revision":17})
+        self.assertEqual(result,unchanged)
+        call.assert_called_once_with({"desktop_enabled":"1"},"state",row["codex_session_id"],
+            refresh=False,data={"sinceRevision":17},progress=None,timeout=240)
+
     def test_background_load_reports_progress_and_result(self):
         task=str(uuid.uuid4())
         def fake_link(_server,value,progress=None):

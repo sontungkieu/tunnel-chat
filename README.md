@@ -182,8 +182,9 @@ values remain metadata and are never resolved as Linux paths.
   company proxies never receive it as one large query parameter. Attach files
   after the new task has been connected.
 - Read messages and command/file activity. The bridge consumes IPC snapshots and
-  patches; the browser refreshes its projection every 1.5 seconds. Normal polling
-  does not reload history or call a model.
+  patches; the browser refreshes its projection every 1.5 seconds. Unchanged polls
+  return only a revision marker, and transient failures keep the last snapshot while
+  retrying with backoff. Normal polling does not reload history or call a model.
 - Send a new turn while idle. To steer a running turn, explicitly select
   **Chỉ dẫn cho lượt đang chạy**. From the moment **Gửi** is pressed, the chat
   loader reports attachment upload, chunked prompt upload, Desktop handoff and

@@ -235,10 +235,15 @@ def require_chat(server, chat_id):
     return chat
 
 
-def state(server, chat_id, refresh=False, progress=None):
+def state(server, chat_id, refresh=False, progress=None, since_revision=None):
     chat = require_chat(server, chat_id)
+    bridge_data = ({"sinceRevision": since_revision}
+                   if isinstance(since_revision, int) and not isinstance(since_revision, bool)
+                   else None)
     result = BRIDGE.call(server.load_config(), "state", chat["codex_session_id"], refresh=refresh,
-                         progress=progress, timeout=240)
+                         data=bridge_data, progress=progress, timeout=240)
+    if result.get("unchanged") is True:
+        return result
     prepare_state_images(server, chat_id, result)
     # Native paths are metadata here; never resolve a Windows cwd as a Linux path.
     with server.connect() as conn:
@@ -608,7 +613,8 @@ def dispatch(server, action, data):
     chat_id = int(data.get("chat_id") or 0)
     require_chat(server,chat_id)
     if action == "state":
-        return state(server,chat_id,bool(data.get("refresh")))
+        return state(server,chat_id,bool(data.get("refresh")),
+                     since_revision=data.get("since_revision"))
     if action == "unlink":
         return unlink(server,chat_id)
     if action in {"send","cancel","reply"}:

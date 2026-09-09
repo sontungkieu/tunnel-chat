@@ -6,6 +6,7 @@ const rpc = RLCSDTransport.createRpc({apiBase:"/d",token,retryLimit:1});
 const uploads = RLCSDTransport.createRpc({apiBase:"/c",token,retryLimit:1});
 let active = Number(sessionStorage.getItem("desktopActiveChat") || 0);
 let snapshot = null, busy = false, polling = false, requestKey = "", messageKey = "";
+let refreshFailures = 0, refreshRetryAt = 0, refreshNotice = false;
 let messageImageUrls = [], imageRenderRevision = 0, pendingMediaRevision = 0, sidebarSyncAt = 0;
 let collapsedProjects = new Set(), taskReadState = {}, newProjectDraft = null, taskMenuContext = null;
 let pendingQuote = null, selectionCandidate = null, selectionTimer = 0;
@@ -711,16 +712,29 @@ async function syncSidebarStatuses() {
 }
 async function refresh(force=false) {
   if(!active || polling || newProjectDraft) return;
+  if(!force && Date.now()<refreshRetryAt)return;
   polling=true;
   const selected=active;
   try {
     const state=(force || !snapshot)
       ? (await loadTask({chat_id:selected,refresh:force})).state
-      : await rpc("state",{chat_id:selected,refresh:false});
-    if(selected===active)renderState(state);
+      : await rpc("state",{chat_id:selected,refresh:false,since_revision:snapshot.revision},{attempts:3});
+    if(selected===active && !state.unchanged)renderState(state);
+    refreshFailures=0;refreshRetryAt=0;
+    if(refreshNotice){notice();refreshNotice=false;}
     await syncSidebarStatuses();
   }
-  catch(e) {snapshot=null;updateControls();updateActivity("failed","Mất kết nối");notice(e.message);}
+  catch(e) {
+    refreshFailures+=1;
+    const delay=Math.min(30000,1500*(2**Math.min(refreshFailures-1,4)));
+    refreshRetryAt=Date.now()+delay;refreshNotice=true;
+    const raw=String(e?.message || e || "Không kết nối được");
+    const detail=/no-client-found|does not support this client|owner/i.test(raw)
+      ? "Codex Desktop chưa sẵn sàng cho task này. Hãy giữ task mở trong app Windows."
+      : raw;
+    if(!snapshot){updateControls();updateActivity("failed","Đang kết nối lại");}
+    notice(`${detail}\nWeb sẽ tự thử lại sau ${Math.ceil(delay/1000)} giây.`);
+  }
   finally {polling=false;}
 }
 $("linkForm").onsubmit=async event=>{
