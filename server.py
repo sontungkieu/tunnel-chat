@@ -4379,6 +4379,24 @@ class ChatHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
             return
+        if path == "/f/upload/chunk-binary":
+            if length < 0 or length > MAX_BINARY_UPLOAD_CHUNK_BYTES:
+                self.send_text("chunk too large", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                return
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                body = self.rfile.read(length)
+                if len(body) != length:
+                    raise ValueError("incomplete chunk body")
+                result = add_binary_file_upload_chunk(
+                    int(query.get("upload_id", ["0"])[0]), query.get("nonce", [""])[0],
+                    int(query.get("chunk_index", ["-1"])[0]), body,
+                    self.headers.get("content-range", ""), self.headers.get("x-chunk-sha256", ""),
+                )
+                self.send_json(result)
+            except Exception as exc:
+                self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
+            return
         if path == "/f/upload/finish-binary":
             if length > 1024 * 1024:
                 self.send_text("payload too large", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)

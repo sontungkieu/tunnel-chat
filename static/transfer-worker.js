@@ -190,12 +190,19 @@ async function uploadBinaryJob(job) {
           const end = Math.min(job.size, start + Number(job.chunkBytes));
           const buffer = await source.slice(start, end).arrayBuffer();
           const hash = await digestChunk(buffer);
-          await binaryRequest(binaryQuery("upload/chunk-binary", {
+          const chunkPath = binaryQuery("upload/chunk-binary", {
             upload_id: job.uploadId, nonce: job.nonce, chunk_index: chunkIndex,
-          }), {method: "PUT", body: buffer, headers: {
+          });
+          const chunkInit = {body: buffer, headers: {
             "content-type": "application/octet-stream", "content-range": `bytes ${start}-${end - 1}/${job.size}`,
             "x-chunk-sha256": hash,
-          }});
+          }};
+          try {
+            await binaryRequest(chunkPath, {method: "PUT", ...chunkInit});
+          } catch (error) {
+            if (error.status !== 403 && error.status !== 405) throw error;
+            await binaryRequest(chunkPath, {method: "POST", ...chunkInit});
+          }
           completedBytes += buffer.byteLength;
           const elapsed = Math.max(0.001, (Date.now() - startedAt) / 1000);
           const speed = completedBytes / elapsed;
