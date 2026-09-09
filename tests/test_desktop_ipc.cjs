@@ -125,7 +125,8 @@ test('projected history stays bounded to the latest 600 messages',()=>{
   assert.equal(view.historyTruncated,true);
 });
 async function fixture(t) {
-  let state=sample(),owner='owner',silent=false,denyInitialize=false;const seen=[],sockets=new Set();
+  let state=sample(),owner='owner',silent=false,denyInitialize=false,noClientCount=0;
+  const seen=[],sockets=new Set(),opened=[];
   const server=net.createServer(socket=>{
     sockets.add(socket);socket.on('close',()=>sockets.delete(socket));
     const decoder=new Decoder(m=>{
@@ -139,6 +140,11 @@ async function fixture(t) {
         socket.write(frame({type:'response',requestId:m.requestId,resultType:'error',error:'unsupported initialization'}));
         return;
       }
+      if(m.method==='thread-owner-discovery' && noClientCount>0) {
+        noClientCount-=1;
+        socket.write(frame({type:'response',requestId:m.requestId,resultType:'error',error:'no-client-found'}));
+        return;
+      }
       let result={ok:true};
       if(m.method==='initialize')result={clientId:'client'};
       if(m.method==='thread-owner-discovery')result={supportsUntrustedAppInput:true};
@@ -150,9 +156,11 @@ async function fixture(t) {
     socket.on('data',c=>decoder.push(c));
   });
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
-  const client=new DesktopClient({socketFactory:()=>net.createConnection(server.address().port,'127.0.0.1'),timeout:50});
+  const client=new DesktopClient({socketFactory:()=>net.createConnection(server.address().port,'127.0.0.1'),
+    timeout:50,openThread:async id=>opened.push(id),ownerWaitMs:100,ownerRetryMs:1});
   t.after(()=>{client.close();for(const s of sockets)s.destroy();server.close();});
-  return {client,seen,setState:s=>state=s,setOwner:o=>owner=o,setSilent:()=>silent=true,setDenyInitialize:value=>denyInitialize=value};
+  return {client,seen,opened,setState:s=>state=s,setOwner:o=>owner=o,setSilent:()=>silent=true,
+    setDenyInitialize:value=>denyInitialize=value,setNoClientCount:value=>noClientCount=value};
 }
 test('follower sends to owner and inherits settings without overriding runtime',async t=>{
   const f=await fixture(t);
@@ -196,6 +204,14 @@ test('state returns a compact unchanged marker for the current revision',async t
   const first=await f.client.state(ID);
   assert.deepEqual(await f.client.state(ID,false,()=>{},first.revision),
     {unchanged:true,revision:first.revision});
+});
+
+test('an explicit task load opens its deeplink and retries owner discovery',async t=>{
+  const f=await fixture(t);f.setNoClientCount(1);
+  const state=await f.client.state(ID);
+  assert.equal(state.threadId,ID);
+  assert.deepEqual(f.opened,[ID]);
+  assert.equal(f.seen.filter(message=>message.method==='thread-owner-discovery').length,2);
 });
 
 test('cancel carries exact active turn; stale stop and implicit steering are rejected',async t=>{

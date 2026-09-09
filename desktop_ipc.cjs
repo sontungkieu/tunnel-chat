@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
+const {spawn} = require('node:child_process');
 const {isDeepStrictEqual} = require('node:util');
 const {EventEmitter} = require('node:events');
 const MAX_FRAME = 128 * 1024 * 1024;
@@ -23,6 +24,17 @@ const SIMPLE_APPROVAL_DECISIONS=new Set(['accept','acceptForSession','decline','
 const STRUCTURED_APPROVAL_DECISIONS=new Set([
   'acceptWithExecpolicyAmendment','applyNetworkPolicyAmendment',
 ]);
+function launchThreadDeepLink(id) {
+  if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id))
+    return Promise.reject(Error('Invalid task ID'));
+  const executable=path.win32.join(process.env.SystemRoot || 'C:\\Windows','System32','rundll32.exe');
+  return new Promise((resolve,reject)=>{
+    const child=spawn(executable,['url.dll,FileProtocolHandler',`codex://threads/${id}`],
+      {detached:true,windowsHide:true,stdio:'ignore'});
+    child.once('error',reject);
+    child.once('spawn',()=>{child.unref();resolve();});
+  });
+}
 function optionalModel(value) {
   if (value===undefined || value===null || value==='') return null;
   const model=String(value).trim();
@@ -314,11 +326,13 @@ function projectState(state, revision) {
 }
 class DesktopClient extends EventEmitter {
   constructor({socketFactory=()=>net.createConnection('\\\\.\\pipe\\codex-ipc'),timeout=15000,
-    historyTimeout=180000,snapshotTimeout=30000}={}) {
+    historyTimeout=180000,snapshotTimeout=30000,openThread=launchThreadDeepLink,
+    ownerWaitMs=30000,ownerRetryMs=400}={}) {
     super(); this.socketFactory=socketFactory; this.timeout=timeout;
     this.historyTimeout=historyTimeout;this.snapshotTimeout=snapshotTimeout;
+    this.openThread=openThread;this.ownerWaitMs=ownerWaitMs;this.ownerRetryMs=ownerRetryMs;
     this.pending=new Map(); this.tasks=new Map(); this.tracking=new Map();
-    this.connecting=null; this.socket=null; this.clientId=null;
+    this.connecting=null; this.socket=null; this.clientId=null;this.openedThreads=new Map();
   }
   async connect() {
     if (this.clientId) return;
@@ -349,7 +363,7 @@ class DesktopClient extends EventEmitter {
     for (const {reject,timer} of this.pending.values()) {clearTimeout(timer);reject(error);}
     this.pending.clear();
     for (const task of this.tasks.values()) {task.error=error.message;task.state=null;}
-    this.tasks.clear();this.tracking.clear();
+    this.tasks.clear();this.tracking.clear();this.openedThreads.clear();
     this.emit('change');
   }
   send(message) {
@@ -422,6 +436,33 @@ class DesktopClient extends EventEmitter {
     })().catch(()=>{}).finally(()=>this.tracking.delete(id));
     this.tracking.set(id,tracking);return tracking;
   }
+  async discoverOwner(id) {
+    try {
+      const discovery=await this.request('thread-owner-discovery',{hostId:'local',conversationId:id});
+      return discovery.handledByClientId && discovery.result?.supportsUntrustedAppInput===true
+        ? discovery : null;
+    } catch(error) {
+      if (/no-client-found/i.test(String(error?.message || error))) return null;
+      throw error;
+    }
+  }
+  async ownerFor(id,onProgress=()=>{}) {
+    let discovery=await this.discoverOwner(id);
+    if (discovery) return discovery;
+    onProgress({stage:'opening-task'});
+    const now=Date.now(),last=this.openedThreads.get(id) || 0;
+    if (now-last>=30000) {
+      await this.openThread(id);this.openedThreads.set(id,now);
+    }
+    onProgress({stage:'waiting-owner'});
+    const deadline=Date.now()+this.ownerWaitMs;
+    while(Date.now()<deadline) {
+      await new Promise(resolve=>setTimeout(resolve,this.ownerRetryMs));
+      discovery=await this.discoverOwner(id);
+      if (discovery) return discovery;
+    }
+    throw Error('Codex Desktop did not expose the task after opening its deeplink. Check that the Windows app is running.');
+  }
   summaries(ids) {
     const requested=(Array.isArray(ids) ? ids : []).filter(id=>
       typeof id==='string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)).slice(0,64);
@@ -442,10 +483,8 @@ class DesktopClient extends EventEmitter {
     if (task?.state && task.historyLoaded && !refresh) {onProgress({stage:'cached'});return task;}
     if (task) this.following(id,task.owner,false);
     onProgress({stage:'discovering'});
-    const discovery=await this.request('thread-owner-discovery',{hostId:'local',conversationId:id});
+    const discovery=await this.ownerFor(id,onProgress);
     const owner=discovery.handledByClientId;
-    if (!owner || discovery.result?.supportsUntrustedAppInput!==true)
-      throw Error('Desktop task owner does not support this client. Open the task in the Windows app.');
     task={owner,state:null,revision:0,error:null,historyLoaded:false};this.tasks.set(id,task);
     this.following(id,owner);
     let lastProgress=0;

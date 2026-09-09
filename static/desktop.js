@@ -29,13 +29,15 @@ const MODEL_EFFORTS={
 const ALL_EFFORTS=["low","medium","high","xhigh","max","ultra"];
 const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết nối Codex Desktop",
   cached:"Đang dùng snapshot đã tải",discovering:"Đang tìm tiến trình sở hữu task",
+  "opening-task":"Đang tự mở task trong app Windows","waiting-owner":"Đang chờ Codex Desktop nhận task",
   "loading-history":"Đang yêu cầu toàn bộ lịch sử",
   "receiving-history":"Đang nhận snapshot lịch sử", "waiting-snapshot":"Đang chờ snapshot",
   projecting:"Đang dựng giao diện","loading-media":"Đang tải tệp trong hội thoại",complete:"Đã tải xong"};
 const createStages={queued:"Đang xếp yêu cầu tạo task",
   "bootstrapping-controller":"Đang chuẩn bị bộ tạo task cho project",
   "controller-ready":"Đã chuẩn bị bộ tạo task",connecting:"Đang kết nối Codex Desktop",
-  discovering:"Đang tìm task điều phối","loading-history":"Đang tải task điều phối",
+  discovering:"Đang tìm task điều phối","opening-task":"Đang tự mở task trong app Windows",
+  "waiting-owner":"Đang chờ Codex Desktop nhận task","loading-history":"Đang tải task điều phối",
   "receiving-history":"Đang nhận dữ liệu task điều phối","waiting-snapshot":"Đang chờ Desktop",
   "waiting-controller":"Đang chờ bộ tạo task sẵn sàng",
   "creating-task":"Codex Desktop đang tạo task mới","linking-task":"Đang kết nối task mới",
@@ -729,8 +731,8 @@ async function refresh(force=false) {
     const delay=Math.min(30000,1500*(2**Math.min(refreshFailures-1,4)));
     refreshRetryAt=Date.now()+delay;refreshNotice=true;
     const raw=String(e?.message || e || "Không kết nối được");
-    const detail=/no-client-found|does not support this client|owner/i.test(raw)
-      ? "Codex Desktop chưa sẵn sàng cho task này. Hãy giữ task mở trong app Windows."
+    const detail=/no-client-found|does not support this client|owner|did not expose the task/i.test(raw)
+      ? "Chưa tự kết nối được Codex Desktop trên máy cá nhân. Hãy kiểm tra app Windows vẫn đang chạy."
       : raw;
     if(!snapshot){updateControls();updateActivity("failed","Đang kết nối lại");}
     notice(`${detail}\nWeb sẽ tự thử lại sau ${Math.ceil(delay/1000)} giây.`);

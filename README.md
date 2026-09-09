@@ -160,9 +160,10 @@ Company browser -> HTTPS tunnel -> Node gateway
                                           -> existing task and runtime
 ```
 
-Open an existing task in the Windows app, then paste its
-`codex://threads/<task-id>` link or UUID into the Desktop page. Only explicitly
-linked tasks are listed; connecting the same task again reuses its record. To
+Paste an existing task's `codex://threads/<task-id>` link or UUID into the
+Desktop page. If the task has no live owner, the Windows bridge opens its deeplink
+in the local app and waits for ownership. Only explicitly linked tasks are listed;
+connecting the same task again reuses its record. To
 create another task, expand a project group and press **＋**, enter the first
 prompt, optionally select its model and effort, then send. The new native Desktop
 task is created inside that saved project and connected automatically.
