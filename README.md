@@ -133,6 +133,14 @@ small-chunk transport used for long prompts. Existing files are never overwritte
 a numeric suffix is added on name collisions. Parent traversal, paths outside the
 configured root, and symbolic links are rejected.
 
+Selected uploads are first saved as persistent browser jobs in IndexedDB. A
+same-origin service worker sends and resumes those jobs, so you can move between
+`/files`, `/codex`, and `/chat/` while an upload is running. Every page shows the
+same compact status indicator; `/files` provides retry, cancel, remove, and queue
+cleanup controls. The file blob is released when a job completes. The access
+token stays in session storage and worker memory and is not written to IndexedDB.
+The public tunnel already uses HTTPS, which is required for service workers.
+
 ```bash
 ./bin/url files
 ```

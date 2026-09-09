@@ -73,7 +73,10 @@ Tunnel và lưu launcher URL mà không đưa token vào câu trả lời của 
 - `/files`: kho truyền file hai chiều riêng, mặc định chỉ mở
   `D:\dev\codex\vai`. Dùng `./bin/url files` để lấy liên kết kèm access token.
   Có thể đổi `FILE_TRANSFER_ROOT` và `FILE_TRANSFER_MAX_BYTES` trong
-  `.env.local`; giới hạn upload mặc định là 32 MiB mỗi file.
+  `.env.local`; giới hạn upload mặc định là 32 MiB mỗi file. File đã chọn được
+  giữ trong hàng đợi IndexedDB và service worker tiếp tục/resume khi chuyển giữa
+  `/files`, `/codex` và `/chat/`. Trình duyệt phải mở qua HTTPS (named/Quick
+  Tunnel) hoặc localhost để dùng service worker.
 
 ## Vận hành
 

@@ -828,7 +828,8 @@ $("stop").onclick=async()=>{
   try {await rpc("cancel",{chat_id:active,expectedTurnId:snapshot.activeTurnId,operation_id:operationId()});await refresh();}
   catch(e){notice(e.message);}finally{setBusy(false);}
 };
-$("logout").onclick=()=>{
+$("logout").onclick=async()=>{
+  await window.TunnelTransfer?.clearAuth().catch(()=>{});
   sessionStorage.removeItem("tunnelChatToken");localStorage.removeItem("fixChatToken");location.reload();
 };
 (async()=>{

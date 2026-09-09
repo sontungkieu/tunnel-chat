@@ -2,7 +2,7 @@
   "name": "tunnel-chat",
   "private": true,
   "scripts": {
-    "test": "node --test tests/test_desktop_ipc.cjs tests/test_gateway.cjs tests/test_native_browser.cjs tests/test_rich_text.cjs tests/test_selection_quote.cjs tests/test_websocket_stream.cjs"
+    "test": "node --test tests/test_desktop_ipc.cjs tests/test_gateway.cjs tests/test_native_browser.cjs tests/test_rich_text.cjs tests/test_selection_quote.cjs tests/test_transfer_worker.cjs tests/test_websocket_stream.cjs"
   },
   "dependencies": {
     "ws": "8.21.3"

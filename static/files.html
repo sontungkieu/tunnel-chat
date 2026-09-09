@@ -7,7 +7,8 @@
   <script>try{document.documentElement.dataset.theme=localStorage.getItem("tunnelChatTheme")||
     (matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch(_error){}</script>
   <link rel="stylesheet" href="/static/files.css">
-  <script defer src="/static/shared.js"></script><script defer src="/static/files.js"></script>
+  <link rel="stylesheet" href="/static/transfer-client.css">
+  <script defer src="/static/shared.js"></script><script defer src="/static/transfer-client.js"></script><script defer src="/static/files.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -60,6 +61,12 @@
           </form>
           <div class="browser-toolbar"><button type="button" id="up" class="secondary">← Thư mục cha</button><code id="currentPath">/</code></div>
           <div id="fileList" class="file-list" aria-label="File trên máy cá nhân"></div>
+        </section>
+        <section class="card queue-card">
+          <div class="card-heading"><div><p class="eyebrow">Dùng chung giữa các trang</p><h2>Hàng đợi upload</h2></div>
+            <button type="button" id="clearFinished" class="secondary">Dọn job đã xong</button></div>
+          <p class="muted queue-help">Bạn có thể chuyển sang ChatGPT hoặc Codex; queue này vẫn tiếp tục và trạng thái sẽ hiện ở góc màn hình.</p>
+          <div id="transferJobs" class="transfer-jobs"><div class="empty">Chưa có upload nền.</div></div>
         </section>
       </div>
     </div>

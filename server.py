@@ -3583,8 +3583,19 @@ class ChatHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         raw_path = parsed.path
         path = normalize_api_path(raw_path)
+        if path == "/transfer-worker.js":
+            data = (BASE_DIR / "static" / "transfer-worker.js").read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("content-type", "text/javascript; charset=utf-8")
+            self.send_header("cache-control", "no-store")
+            self.send_header("service-worker-allowed", "/")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if path in {"/static/shared.js", "/static/desktop.js", "/static/rich-text.js", "/static/selection-quote.js",
-                    "/static/desktop.css", "/static/files.js", "/static/files.css"}:
+                    "/static/desktop.css", "/static/files.js", "/static/files.css",
+                    "/static/transfer-client.js", "/static/transfer-client.css"}:
             static_path = BASE_DIR / "static" / Path(path).name
             data = static_path.read_bytes()
             self.send_response(HTTPStatus.OK)
