@@ -145,7 +145,7 @@ maps only `D:\dev\codex\vai` on the personal Windows machine. From a company
 computer or phone you can select multiple local files and upload them into that
 directory, browse its folders, or enter a relative/full Windows path inside the
 root and download a file to the current device. Large uploads use resumable
-binary-v2: 8 MiB chunks, up to 8 bounded adaptive lanes, per-chunk SHA-256,
+binary-v2: 8 KiB chunks for the current company proxy, up to 8 bounded adaptive lanes, per-chunk SHA-256,
 disk-backed staging, and atomic publish. The existing JSON/base64 transport
 remains as a fallback. Existing files are never overwritten;
 a numeric suffix is added on name collisions. Parent traversal, paths outside the
@@ -166,7 +166,7 @@ and return navigation share one authenticated session until **Xóa token** is
 pressed. It remains separate from upload job data and is not written to IndexedDB.
 The public tunnel already uses HTTPS, which is required for service workers.
 For the 10 GiB profile use `TRANSFER_PROTOCOL=auto`,
-`BINARY_UPLOAD_CHUNK_BYTES=8388608`, `UPLOAD_CONCURRENCY=4`,
+`BINARY_UPLOAD_CHUNK_BYTES=8192`, `UPLOAD_CONCURRENCY=4`,
 `UPLOAD_CONCURRENCY_MAX=8`, `FILE_TRANSFER_MAX_BYTES=10737418240`, and
 `FILE_TRANSFER_STAGING_MAX_BYTES=21474836480`. Traffic remains on the existing
 HTTPS tunnel; this does not bypass proxy controls or Cloudflare limits.

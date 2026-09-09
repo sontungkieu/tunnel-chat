@@ -156,6 +156,19 @@ async function digestChunk(buffer) {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function decodeMissingRanges(value) {
+  if (!value) return [];
+  const result = [];
+  for (const item of String(value).split(",").filter(Boolean)) {
+    const parts = item.split("-").map(Number);
+    if (parts.length === 1 && Number.isInteger(parts[0])) result.push(parts[0]);
+    else if (parts.length === 2 && Number.isInteger(parts[0]) && Number.isInteger(parts[1])) {
+      for (let index = parts[0]; index <= parts[1]; index += 1) result.push(index);
+    }
+  }
+  return result;
+}
+
 async function uploadBinaryJob(job) {
   const source = await getBinarySource(job);
   const chunkBytes = Number(job.chunkBytes || runtime.chunkBytes || 8 * 1024 * 1024);
@@ -172,7 +185,7 @@ async function uploadBinaryJob(job) {
       await putJob(job);
     }
     const status = await binaryRequest(binaryQuery("upload/status-binary", {upload_id: job.uploadId, nonce: job.nonce}));
-    const missing = Array.isArray(status.missing) ? status.missing.map(Number) : [];
+    const missing = Array.isArray(status.missing) ? status.missing.map(Number) : decodeMissingRanges(status.missing_ranges);
     const startedAt = Number(job.startedAt || Date.now());
     let completedBytes = Number(status.received_bytes || 0);
     let laneCount = Math.max(1, Math.min(Number(runtime.concurrency || 4), Number(runtime.concurrencyMax || 8)));

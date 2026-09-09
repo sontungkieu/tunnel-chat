@@ -57,9 +57,9 @@ MAX_FILE_TRANSFER_MAX_BYTES = 128 * 1024 * 1024
 DEFAULT_BINARY_FILE_TRANSFER_MAX_BYTES = 10 * 1024 * 1024 * 1024
 MAX_BINARY_FILE_TRANSFER_MAX_BYTES = 10 * 1024 * 1024 * 1024
 DEFAULT_FILE_TRANSFER_STAGING_MAX_BYTES = 20 * 1024 * 1024 * 1024
-MIN_BINARY_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
+MIN_BINARY_UPLOAD_CHUNK_BYTES = 1024
 MAX_BINARY_UPLOAD_CHUNK_BYTES = 16 * 1024 * 1024
-DEFAULT_BINARY_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+DEFAULT_BINARY_UPLOAD_CHUNK_BYTES = 8 * 1024
 DEFAULT_UPLOAD_CONCURRENCY_MAX = 8
 MAX_CLIPBOARD_NOTE_BYTES = 4 * 1024 * 1024
 MAX_QUEUE_UPLOAD_BYTES = 4 * 1024 * 1024
@@ -1433,7 +1433,7 @@ def create_binary_file_upload(relative_dir: str, filename: str, mime_type: str, 
         raise ValueError(f"file too large; limit is {binary_file_transfer_max_bytes() // 1024 // 1024} MB")
     chunk_size = binary_upload_chunk_bytes()
     total_chunks = max(1, (size + chunk_size - 1) // chunk_size)
-    if total_chunks > MAX_UPLOAD_CHUNKS:
+    if total_chunks > 2_000_000:
         raise ValueError("file has too many chunks")
     nonce = secrets.token_urlsafe(24)
     with connect() as conn:
@@ -1513,7 +1513,7 @@ def get_binary_file_upload_status(upload_id: int, nonce: str) -> dict[str, objec
     return {"upload_id": int(upload_id), "protocol": "binary-v2", "chunk_bytes": int(session["chunk_size"]),
             "total_chunks": int(session["total_chunks"]), "received_chunks": len(received),
             "received_bytes": sum(received.values()), "missing_ranges": transfer_protocol.encode_missing_ranges(missing),
-            "missing": missing}
+            "missing": missing if len(missing) <= 100_000 else None}
 
 
 def finish_binary_file_upload(upload_id: int, nonce: str, file_sha256: str) -> dict[str, object]:
