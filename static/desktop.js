@@ -442,6 +442,7 @@ function renderState(state) {
   updateControls();
   const next=JSON.stringify(state.messages);
   if(next!==messageKey) {
+    const initialMessageRender=!messageKey;
     hideSelectionAction();
     releaseMessageImages();
     const revision=++imageRenderRevision,chatId=active;
@@ -470,12 +471,19 @@ function renderState(state) {
     if(nearBottom || !messageKey) $("messages").scrollTop=$("messages").scrollHeight;
     messageKey=next;
     if(imageLoads.length) {
-      pendingMediaRevision=revision;
+      // Existing images are rebuilt when a streamed text chunk arrives. Load
+      // them in the background so an old attachment cannot cover each chunk
+      // with the full conversation loader.
+      const blockingMediaLoad=initialMessageRender;
+      pendingMediaRevision=blockingMediaLoad?revision:0;
       let loaded=0;const total=imageLoads.length;
-      setChatLoading(true,{stage:"loading-media",progress:{percent:0},detail:`0/${total} tệp`});
+      if(blockingMediaLoad)setChatLoading(true,{stage:"loading-media",progress:{percent:0},detail:`0/${total} tệp`});
+      else setChatLoading(false);
       for(const imageLoad of imageLoads)void imageLoad.finally(()=>{
-        if(revision!==imageRenderRevision || pendingMediaRevision!==revision)return;
+        if(revision!==imageRenderRevision)return;
         loaded+=1;
+        if(!blockingMediaLoad)return;
+        if(pendingMediaRevision!==revision)return;
         if(loaded>=total){pendingMediaRevision=0;setChatLoading(false);return;}
         setChatLoading(true,{stage:"loading-media",progress:{percent:loaded/total*100},detail:`${loaded}/${total} tệp`});
       });
