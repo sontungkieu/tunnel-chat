@@ -222,6 +222,7 @@ function renderCreateDraft() {
   updateActivity("idle","Soạn yêu cầu đầu tiên");
   $("activityDetail").textContent="Task sẽ được tạo trong project này khi bạn gửi tin nhắn đầu tiên.";
   $("messages").replaceChildren(textElement("div","Nhập yêu cầu đầu tiên, chọn model và effort nếu cần, rồi bấm Gửi.","empty create-empty"));
+  updateScrollLatest();
   $("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="Có thể đính kèm sau khi task được tạo.";
   $("mode").value="start";generationChat=0;$("modelSelect").value="";rebuildEffortChoices();
   $("modelSelect").options[0].textContent="Mặc định của app";
@@ -336,7 +337,7 @@ function scheduleSelectionAction() {
 }
 $("messages").addEventListener("pointerup",scheduleSelectionAction);
 $("messages").addEventListener("keyup",scheduleSelectionAction);
-$("messages").addEventListener("scroll",hideSelectionAction,{passive:true});
+$("messages").addEventListener("scroll",()=>{hideSelectionAction();updateScrollLatest();},{passive:true});
 document.addEventListener("selectionchange",scheduleSelectionAction);
 $("selectionAction").onpointerdown=event=>event.preventDefault();
 $("selectionAction").onclick=()=>{
@@ -370,6 +371,20 @@ async function loadMessageImage(element,caption,image,chatId,revision) {
   }
 }
 const liveRunningActivities=new Set(["thinking","tool","working","finalizing"]);
+function updateScrollLatest() {
+  const messages=$("messages"),button=$("scrollLatest");
+  const distance=Math.max(0,messages.scrollHeight-messages.scrollTop-messages.clientHeight);
+  const visible=!!snapshot && distance>80;
+  const running=visible && liveRunningActivities.has(snapshot?.activity || snapshot?.status);
+  button.hidden=!visible;button.dataset.running=String(running);
+  const label=running?"Agent đang trả lời · cuộn xuống cuối":"Cuộn xuống cuối hội thoại";
+  button.title=label;button.setAttribute("aria-label",label);
+}
+$("scrollLatest").onclick=()=>{
+  const messages=$("messages");
+  messages.scrollTo({top:messages.scrollHeight,behavior:"smooth"});
+  requestAnimationFrame(updateScrollLatest);
+};
 function completionMarker(chat) {
   if(chat.activity!=="completed" || !chat.latestTurnId)return "";
   let hash=2166136261;
@@ -482,6 +497,7 @@ function renderState(state) {
       for(const imageLoad of imageLoads)void imageLoad.finally(()=>{
         if(revision!==imageRenderRevision)return;
         loaded+=1;
+        updateScrollLatest();
         if(!blockingMediaLoad)return;
         if(pendingMediaRevision!==revision)return;
         if(loaded>=total){pendingMediaRevision=0;setChatLoading(false);return;}
@@ -491,6 +507,7 @@ function renderState(state) {
   } else if(!pendingMediaRevision)setChatLoading(false);
   const requests=JSON.stringify(state.requests);
   if(requests!==requestKey) {renderRequests(state.requests);requestKey=requests;}
+  updateScrollLatest();
 }
 async function reply(request,data) {
   if (busy) return;
@@ -659,6 +676,7 @@ function clearSelectedTask() {
   updateActivity("idle","Chưa kết nối");
   $("activityDetail").textContent="Kết nối một task để theo dõi hoạt động.";
   $("messages").replaceChildren(textElement("p","Chọn một task ở sidebar hoặc kết nối bằng deeplink.","empty"));
+  updateScrollLatest();
   $("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
   updateControls();
 }
@@ -668,6 +686,7 @@ async function selectChat(chat,force=false) {
   clearPendingQuote();hideSelectionAction();setBusy(true);notice();
   active=Number(chat.id);newProjectDraft=null;sessionStorage.setItem("desktopActiveChat",String(active));
   snapshot=null;messageKey="";requestKey="";renderContextUsage(null);$("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="";
+  updateScrollLatest();
   updateControls();
   try {await list();await refresh(force);}
   catch(e) {notice(e.message);}
@@ -718,6 +737,7 @@ document.addEventListener("keydown",event=>{
 });
 window.addEventListener("resize",()=>closeTaskMenu());
 window.addEventListener("resize",hideSelectionAction);
+window.addEventListener("resize",updateScrollLatest);
 document.addEventListener("scroll",()=>{closeTaskMenu();hideSelectionAction();},true);
 async function list() {
   const data=await rpc("list");transport=data.transport;

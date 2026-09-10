@@ -248,6 +248,9 @@ values remain metadata and are never resolved as Linux paths.
 - The Codex page supports persistent light and dark themes. Its live activity
   panel can be collapsed, and completed tool calls are collapsed by default
   while running or failed calls stay open for inspection.
+- Scrolling away from the latest message reveals a centered jump-to-latest
+  button. It shows a down arrow while idle and animated dots while the agent is
+  working; selecting it returns to the end and restores live auto-follow.
 - On phones, the project/task sidebar becomes an accessible slide-out drawer;
   chat, pending approvals and the composer stay inside the dynamic viewport with
   touch-sized controls and safe-area padding.

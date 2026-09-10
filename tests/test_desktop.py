@@ -343,6 +343,7 @@ class DesktopTests(unittest.TestCase):
             self.assertIn(b'id="quoteContext"', get("/codex")[1])
             self.assertIn(b'id="chatLoader"', get("/codex")[1])
             self.assertIn(b'id="chatLoaderProgress"', get("/codex")[1])
+            self.assertIn(b'id="scrollLatest"', get("/codex")[1])
             self.assertIn(b'id="newProject"', get("/codex")[1])
             self.assertIn(b'id="projectDialog"', get("/codex")[1])
             self.assertIn(b'data-action="rename"', get("/codex")[1])
