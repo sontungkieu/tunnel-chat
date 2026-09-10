@@ -154,9 +154,9 @@ class DesktopTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"uncertain"):desktop.mutate(server,chat,"cancel",data)
             call.assert_called_once()
 
-    def test_task_creation_persists_project_controller_and_deduplicates(self):
-        source=self.chat();child=str(uuid.uuid4());controller=str(uuid.uuid4())
-        result={"threadId":child,"controllerThreadId":controller,"controllerCreated":True,
+    def test_task_creation_uses_one_target_and_deduplicates(self):
+        source=self.chat();child=str(uuid.uuid4())
+        result={"threadId":child,"sourceThreadId":str(uuid.uuid4()),
                 "state":{"threadId":child,"title":"new task","cwd":r"D:\work",
                          "status":"running","messages":[]}}
         operation=str(uuid.uuid4())
@@ -166,14 +166,13 @@ class DesktopTests(unittest.TestCase):
             repeated=desktop.create_task(server,source,payload)
         self.assertEqual(created,repeated)
         self.assertEqual(created["state"]["title"],"new task")
-        self.assertEqual(desktop.project_controller(server,r"D:\work"),controller)
         self.assertEqual(server.get_codex_chat(created["chat_id"])["codex_session_id"],child)
         call.assert_called_once()
 
     def test_first_task_can_target_another_saved_desktop_project(self):
-        source=self.chat();child=str(uuid.uuid4());controller=str(uuid.uuid4())
+        source=self.chat();child=str(uuid.uuid4())
         target=r"D:\dev\codex\new-project"
-        result={"threadId":child,"controllerThreadId":controller,"controllerCreated":True,
+        result={"threadId":child,"sourceThreadId":str(uuid.uuid4()),
                 "state":{"threadId":child,"title":"first task","cwd":target,
                          "status":"running","messages":[]}}
         payload={"operation_id":str(uuid.uuid4()),"text":"start here","project_path":target}
@@ -181,8 +180,7 @@ class DesktopTests(unittest.TestCase):
             created=desktop.create_task(server,source,payload)
         outgoing=call.call_args.args[3]
         self.assertEqual(outgoing["projectPath"],target)
-        self.assertIsNone(outgoing["controllerThreadId"])
-        self.assertEqual(desktop.project_controller(server,target),controller)
+        self.assertNotIn("controllerThreadId",outgoing)
         self.assertEqual(server.get_codex_chat(created["chat_id"])["repo_path"],target)
 
     def test_new_project_path_must_be_absolute_windows_path(self):

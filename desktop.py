@@ -233,9 +233,6 @@ def init_schema(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS desktop_actions (
         operation_id TEXT PRIMARY KEY, chat_id INTEGER NOT NULL, action TEXT NOT NULL,
         fingerprint TEXT NOT NULL, status TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL)""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS desktop_project_controllers (
-        project_key TEXT PRIMARY KEY, project_path TEXT NOT NULL,
-        controller_thread_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
 
 
 def require_chat(server, chat_id):
@@ -431,33 +428,6 @@ CREATE_JOBS_LOCK = threading.Lock()
 CREATE_TTL_SECONDS = 30 * 60
 
 
-def project_key(value: str) -> str:
-    normalized = str(value or "").rstrip("\\/").casefold()
-    if not normalized:
-        raise ValueError("The selected task has no project path")
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
-def project_controller(server, path: str) -> str | None:
-    with server.connect() as conn:
-        row = conn.execute("""SELECT controller_thread_id FROM desktop_project_controllers
-                            WHERE project_key=?""", (project_key(path),)).fetchone()
-    return row[0] if row else None
-
-
-def save_project_controller(server, path: str, task: str) -> None:
-    task = thread_id(task)
-    timestamp = server.now_iso()
-    with server.connect() as conn:
-        conn.execute("""INSERT INTO desktop_project_controllers
-            (project_key,project_path,controller_thread_id,created_at,updated_at)
-            VALUES (?,?,?,?,?)
-            ON CONFLICT(project_key) DO UPDATE SET project_path=excluded.project_path,
-              controller_thread_id=excluded.controller_thread_id,updated_at=excluded.updated_at""",
-            (project_key(path), path, task, timestamp, timestamp))
-        conn.commit()
-
-
 def create_task(server, source_chat_id: int, data: dict, progress=None) -> dict:
     source = require_chat(server, source_chat_id)
     prompt = str(data.get("text") or "").strip()
@@ -485,16 +455,14 @@ def create_task(server, source_chat_id: int, data: dict, progress=None) -> dict:
         conn.commit()
     path = project_path(data.get("project_path"), source["repo_path"])
     outgoing = dict(data)
-    outgoing.update(text=prompt,projectPath=path,controllerThreadId=project_controller(server,path))
+    outgoing.pop("controllerThreadId", None)
+    outgoing.update(text=prompt, projectPath=path)
     def report(update):
-        if isinstance(update,dict) and update.get("controllerThreadId"):
-            save_project_controller(server,path,update["controllerThreadId"])
         if progress:
             progress(update)
     try:
         result = BRIDGE.call(server.load_config(),"create",source["codex_session_id"],outgoing,
                              progress=report,timeout=600)
-        save_project_controller(server,path,result["controllerThreadId"])
         task = thread_id(result["threadId"])
         state_result = result["state"]
         with server.connect() as conn:

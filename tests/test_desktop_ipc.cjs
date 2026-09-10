@@ -77,22 +77,37 @@ test('created task IDs are read from the completed Desktop dynamic tool result',
   assert.equal(createdThreadIdFromTurn({items:[{type:'dynamicToolCall',tool:'create_thread',
     success:false,contentItems:[{type:'inputText',text:JSON.stringify({threadId:child})}]}]}),null);
 });
-test('task creation can bootstrap a controller in another saved project',async()=>{
-  const controller='22222222-2222-4222-8222-222222222222';
+test('task creation uses its source and creates exactly one target task',async()=>{
   const child='33333333-3333-4333-8333-333333333333',instructions=[];
   const client=new DesktopClient();
   client.watch=async()=>({state:sample(),revision:1});
-  client.runCreateInstruction=async(_id,instruction)=>{
-    instructions.push(instruction);return instructions.length===1?controller:child;
+  client.runCreateInstruction=async(id,instruction)=>{
+    instructions.push({id,instruction});return child;
   };
   client.waitForIdle=async()=>{};
   client.state=async()=>({threadId:child,title:'new task',cwd:'D:\\dev\\codex\\target',status:'running'});
   const result=await client.create(ID,{projectPath:'D:\\dev\\codex\\target',text:'first prompt'});
   client.close();
   assert.equal(result.threadId,child);
-  assert.equal(result.controllerThreadId,controller);
-  assert.ok(instructions.every(value=>value.includes('D:\\\\dev\\\\codex\\\\target')));
-  assert.ok(!instructions.some(value=>value.includes('D:\\\\work')));
+  assert.equal(result.sourceThreadId,ID);
+  assert.equal(instructions.length,1);
+  assert.equal(instructions[0].id,ID);
+  assert.ok(instructions[0].instruction.includes('D:\\\\dev\\\\codex\\\\target'));
+  assert.ok(!instructions[0].instruction.includes('D:\\\\work'));
+});
+test('message time, branch and structured memory citations are projected',()=>{
+  const s=sample(),turn=s.turns[0],agent=turn.items[0];
+  s.gitInfo={branch:'feature/web-ui'};turn.turnStartedAtMs=1700000000000;
+  turn.aeonAssistantMessageStartedAtMsById={a:1700000005000};
+  agent.memoryCitation={entries:[{path:'MEMORY.md',lineStart:10,lineEnd:12,note:'prior decision'}],
+    threadIds:['22222222-2222-4222-8222-222222222222']};
+  const view=projectState(s,1);
+  assert.equal(view.branch,'feature/web-ui');
+  assert.equal(view.messages[0].createdAt,'2023-11-14T22:13:20.000Z');
+  assert.equal(view.messages[1].createdAt,'2023-11-14T22:13:25.000Z');
+  assert.deepEqual(view.messages[1].memoryCitation,{entries:[{
+    path:'MEMORY.md',lineStart:10,lineEnd:12,note:'prior decision',
+  }],threadIds:['22222222-2222-4222-8222-222222222222']});
 });
 test('internal task-creation turns stay out of the projected web history',()=>{
   const s=sample();

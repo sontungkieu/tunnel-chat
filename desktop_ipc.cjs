@@ -248,6 +248,43 @@ function projectOf(state, latestTurn) {
   const trimmed=projectPath.replace(/[\\/]+$/,'');
   return {project:trimmed.split(/[\\/]/).at(-1) || '',projectPath};
 }
+function branchOf(state) {
+  const info=state?.gitInfo;
+  if (typeof info==='string') return info.trim();
+  if (!info || typeof info!=='object') return '';
+  for (const key of ['branch','branchName','currentBranch','headBranch','refName']) {
+    if (typeof info[key]==='string' && info[key].trim()) return info[key].trim();
+  }
+  return '';
+}
+function messageCreatedAt(turn, item, role) {
+  let value=null;
+  if (item?.id && turn?.aeonAssistantMessageStartedAtMsById &&
+      Number.isFinite(Number(turn.aeonAssistantMessageStartedAtMsById[item.id])))
+    value=Number(turn.aeonAssistantMessageStartedAtMsById[item.id]);
+  else if (role==='assistant' && ['final','final_answer'].includes(item?.phase) &&
+      Number.isFinite(Number(turn?.finalAssistantStartedAtMs)))
+    value=Number(turn.finalAssistantStartedAtMs);
+  else if (Number.isFinite(Number(turn?.turnStartedAtMs)))
+    value=Number(turn.turnStartedAtMs);
+  return Number.isFinite(value) && value>0 ? new Date(value).toISOString() : null;
+}
+function memoryCitationOf(item) {
+  const citation=item?.memoryCitation;
+  if (!citation || typeof citation!=='object') return null;
+  const entries=(Array.isArray(citation.entries) ? citation.entries : []).flatMap(entry=>{
+    if (!entry || typeof entry.path!=='string' || !entry.path.trim()) return [];
+    const lineStart=Number(entry.lineStart),lineEnd=Number(entry.lineEnd);
+    return [{path:entry.path.trim(),
+      lineStart:Number.isInteger(lineStart) && lineStart>0 ? lineStart : null,
+      lineEnd:Number.isInteger(lineEnd) && lineEnd>0 ? lineEnd : null,
+      note:typeof entry.note==='string' ? entry.note.trim() : ''}];
+  }).slice(0,50);
+  const threadIds=(Array.isArray(citation.threadIds) ? citation.threadIds : [])
+    .filter(value=>typeof value==='string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value))
+    .map(value=>value.toLowerCase()).slice(0,50);
+  return entries.length || threadIds.length ? {entries,threadIds} : null;
+}
 const TERMINAL_ITEM_STATUSES=new Set(['completed','failed','declined','cancelled','canceled','interrupted']);
 function activityOf(state, latestTurn, activeTurn) {
   if ((state.requests || []).length) return 'waiting';
@@ -297,8 +334,11 @@ function projectState(state, revision) {
     const turnUser={text:textInput(turn.params?.input),images:imageInput(turn.params?.input)};
     const hasCanonicalUser=(turn.items || []).some(item=>item.type==='userMessage' &&
       sameUserInput(userInput(item),turnUser));
-    if ((turnUser.text || turnUser.images.length) && !hasCanonicalUser)
-      addMessage({id:turn.turnId+':user',role:'user',...turnUser});
+    if ((turnUser.text || turnUser.images.length) && !hasCanonicalUser) {
+      const message={id:turn.turnId+':user',role:'user',...turnUser};
+      const createdAt=messageCreatedAt(turn,null,'user');if(createdAt)message.createdAt=createdAt;
+      addMessage(message);
+    }
     for (const item of turn.items || []) {
       if (item.type === 'contextCompaction') {
         compactionCount+=1;
@@ -306,11 +346,19 @@ function projectState(state, revision) {
         continue;
       }
       // Do not export reasoning, ambient context, configuration, or arbitrary tool payloads.
-      if (item.type === 'agentMessage' || item.type === 'assistantMessage')
-        addMessage({id:item.id,role:'assistant',text:item.text || '',phase:item.phase || ''});
+      if (item.type === 'agentMessage' || item.type === 'assistantMessage') {
+        const message={id:item.id,role:'assistant',text:item.text || '',phase:item.phase || ''};
+        const createdAt=messageCreatedAt(turn,item,'assistant');if(createdAt)message.createdAt=createdAt;
+        const memoryCitation=memoryCitationOf(item);if(memoryCitation)message.memoryCitation=memoryCitation;
+        addMessage(message);
+      }
       else if (item.type === 'steeringUserMessage' || item.type === 'userMessage') {
         const user=userInput(item);
-        if (user.text || user.images.length) addMessage({id:item.id,role:'user',...user});
+        if (user.text || user.images.length) {
+          const message={id:item.id,role:'user',...user};
+          const createdAt=messageCreatedAt(turn,item,'user');if(createdAt)message.createdAt=createdAt;
+          addMessage(message);
+        }
       } else if (item.type === 'commandExecution')
         addMessage({id:item.id,role:'tool',text:String(item.command || ''),status:item.status});
       else if (item.type === 'fileChange')
@@ -333,7 +381,7 @@ function projectState(state, revision) {
     } : null;
   return {threadId:state.id,title:state.title || state.generatedTitle || state.id,
     cwd:state.cwd || '',backend:'desktop',hostId:'local',
-    project:project.project,projectPath:project.projectPath,
+    project:project.project,projectPath:project.projectPath,branch:branchOf(state),
     model:state.latestModel || '',
     effort:state.latestThreadSettings?.effort || state.latestReasoningEffort || null,...summary,
     contextUsage,
@@ -642,7 +690,7 @@ class DesktopClient extends EventEmitter {
       const task=this.tasks.get(id);
       if (!task?.state) throw Error(task?.error || 'Desktop task disconnected while waiting');
       if (taskSummaryFromTurns(task.state,turnsOf(task.state),task.revision).status==='idle') return;
-      onProgress({stage:'waiting-controller'});
+      onProgress({stage:'waiting-source'});
       await new Promise(resolve=>{
         const timer=setTimeout(()=>{this.off('change',changed);resolve();},500);
         const changed=changedId=>{if(!changedId || changedId===id){clearTimeout(timer);this.off('change',changed);resolve();}};
@@ -679,30 +727,15 @@ class DesktopClient extends EventEmitter {
     const model=optionalModel(data.model),effort=optionalEffort(data.effort);
     const prompt=String(data.text || '').trim();
     if (!prompt) throw Error('Enter the first message for the new task');
-    let controllerId=typeof data.controllerThreadId==='string' ? data.controllerThreadId : null;
-    let controllerCreated=false;
-    if (controllerId) {
-      try { await this.watch(controllerId); }
-      catch (_error) { controllerId=null; }
-    }
-    if (!controllerId) {
-      onProgress({stage:'bootstrapping-controller'});
-      const controllerPrompt=`You are the dedicated Tunnel Chat task creator for ${projectPath}. `+
-        `Do not edit files. For later internal control requests, use codex_app.list_projects and `+
-        `codex_app.create_thread exactly as requested, then return the created task ID.`;
-      controllerId=await this.runCreateInstruction(sourceId,
-        this.createInstruction(projectPath,controllerPrompt,{title:`Tunnel Chat · ${sourceView.project || 'project'}`}),onProgress);
-      controllerCreated=true;
-      onProgress({stage:'controller-ready',controllerThreadId:controllerId});
-      await this.watch(controllerId,true,onProgress);
-    }
-    await this.waitForIdle(controllerId,onProgress);
+    // The source task performs the single create_thread call. Its internal turn is
+    // filtered from the web projection, avoiding a second dedicated controller task.
+    await this.waitForIdle(sourceId,onProgress);
     onProgress({stage:'creating-task'});
-    const childId=await this.runCreateInstruction(controllerId,
+    const childId=await this.runCreateInstruction(sourceId,
       this.createInstruction(projectPath,prompt,{model,effort}),onProgress);
     onProgress({stage:'linking-task'});
     const state=await this.state(childId,true,onProgress);
-    return {threadId:childId,controllerThreadId:controllerId,controllerCreated,state};
+    return {threadId:childId,sourceThreadId:sourceId,state};
   }
   close() { this.disconnect(Error('Bridge stopped')); }
 }

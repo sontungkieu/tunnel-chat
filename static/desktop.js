@@ -34,12 +34,11 @@ const loadStages={queued:"Đang xếp yêu cầu tải",connecting:"Đang kết 
   "receiving-history":"Đang nhận snapshot lịch sử", "waiting-snapshot":"Đang chờ snapshot",
   projecting:"Đang dựng giao diện","loading-media":"Đang tải tệp trong hội thoại",complete:"Đã tải xong"};
 const createStages={queued:"Đang xếp yêu cầu tạo task",
-  "bootstrapping-controller":"Đang chuẩn bị bộ tạo task cho project",
-  "controller-ready":"Đã chuẩn bị bộ tạo task",connecting:"Đang kết nối Codex Desktop",
-  discovering:"Đang tìm task điều phối","opening-task":"Đang tự mở task trong app Windows",
-  "waiting-owner":"Đang chờ Codex Desktop nhận task","loading-history":"Đang tải task điều phối",
-  "receiving-history":"Đang nhận dữ liệu task điều phối","waiting-snapshot":"Đang chờ Desktop",
-  "waiting-controller":"Đang chờ bộ tạo task sẵn sàng",
+  connecting:"Đang kết nối Codex Desktop",discovering:"Đang tìm task nguồn",
+  "opening-task":"Đang tự mở task trong app Windows",
+  "waiting-owner":"Đang chờ Codex Desktop nhận task","loading-history":"Đang tải task nguồn",
+  "receiving-history":"Đang nhận dữ liệu task nguồn","waiting-snapshot":"Đang chờ Desktop",
+  "waiting-source":"Đang chờ task nguồn sẵn sàng",
   "creating-task":"Codex Desktop đang tạo task mới","linking-task":"Đang kết nối task mới",
   projecting:"Đang dựng giao diện",complete:"Task mới đã sẵn sàng"};
 const activityLabels={thinking:"Đang suy nghĩ",tool:"Đang chạy công cụ",waiting:"Đang chờ bạn",
@@ -443,13 +442,61 @@ function toolCard(message) {
   details.append(summary,textElement("pre",message.text || "Không có nội dung bổ sung."));
   return details;
 }
+function formatMessageTime(value) {
+  const date=new Date(value);
+  if(!Number.isFinite(date.getTime()))return "";
+  const today=new Date(),sameDay=date.getFullYear()===today.getFullYear() &&
+    date.getMonth()===today.getMonth() && date.getDate()===today.getDate();
+  return new Intl.DateTimeFormat("vi-VN",sameDay
+    ? {hour:"2-digit",minute:"2-digit"}
+    : {day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}).format(date);
+}
+function memoryCitationCard(citation) {
+  if(!citation || (!citation.entries?.length && !citation.threadIds?.length))return null;
+  const details=textElement("details","","message-memory"),summary=document.createElement("summary");
+  summary.textContent=`Memory cited · ${(citation.entries || []).length} nguồn`;details.append(summary);
+  const body=textElement("div","","message-memory-body");
+  for(const entry of citation.entries || []) {
+    const row=textElement("div","","memory-entry"),line=entry.lineStart
+      ? `:${entry.lineStart}${entry.lineEnd && entry.lineEnd!==entry.lineStart?`-${entry.lineEnd}`:""}`:"";
+    row.append(textElement("code",`${entry.path}${line}`));
+    if(entry.note)row.append(textElement("span",entry.note,"muted"));
+    body.append(row);
+  }
+  if(citation.threadIds?.length) {
+    const tasks=textElement("div","","memory-threads");
+    tasks.append(textElement("span","Task nguồn:","muted"));
+    for(const id of citation.threadIds)tasks.append(textElement("code",id));
+    body.append(tasks);
+  }
+  details.append(body);return details;
+}
+function messageMeta(message) {
+  const meta=textElement("div","","message-meta");
+  if(message.text) {
+    const copy=textElement("button","⧉","message-copy");copy.type="button";
+    copy.title="Sao chép nội dung";copy.setAttribute("aria-label","Sao chép nội dung tin nhắn");
+    copy.onclick=async()=>{
+      try {await copyText(message.text,"nội dung");copy.dataset.copied="true";}
+      finally {setTimeout(()=>{if(copy.isConnected)delete copy.dataset.copied;},1200);}
+    };
+    meta.append(copy);
+  }
+  const label=formatMessageTime(message.createdAt);
+  if(label) {
+    const time=textElement("time",label);time.dateTime=message.createdAt;
+    time.title=new Date(message.createdAt).toLocaleString("vi-VN");meta.append(time);
+  }
+  return meta.children.length ? meta : null;
+}
 function renderState(state) {
   snapshot=state;
   syncGenerationControls(state);
   renderContextUsage(state.contextUsage);
   $("title").textContent=state.title;
   const project=state.project || (state.cwd || "").replace(/[\\/]+$/,"").split(/[\\/]/).at(-1);
-  $("meta").textContent=[project?`Project: ${project}`:"Project: chưa xác định",state.model,state.cwd,"Desktop · local"].filter(Boolean).join(" · ");
+  $("meta").textContent=[project?`Project: ${project}`:"Project: chưa xác định",
+    state.branch?`Branch: ${state.branch}`:"",state.model,state.cwd,"Desktop · local"].filter(Boolean).join(" · ");
   updateActivity(state.activity || state.status,
     activityLabels[state.activity] || (state.status==="running"?"Agent đang làm việc":"Sẵn sàng"));
   updateTaskIndicator({id:active,live:true,...state},true);
@@ -478,6 +525,8 @@ function renderState(state) {
         }
         card.append(gallery);
       }
+      const memory=memoryCitationCard(message.memoryCitation);if(memory)card.append(memory);
+      const meta=messageMeta(message);if(meta)card.append(meta);
       fragment.append(card);
     }
     if(state.historyTruncated) fragment.prepend(textElement("p","Đang hiển thị 600 mục gần nhất.","history-note"));

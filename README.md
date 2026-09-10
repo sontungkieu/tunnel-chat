@@ -186,7 +186,7 @@ Windows path of a project already saved in Codex Desktop, then compose its first
 prompt. Codex Desktop currently exposes task creation inside saved projects; add a
 brand-new folder to the Desktop app first so it appears in its project list.
 The task menu can set a Tunnel Chat display name without changing the native
-Desktop title. The compact composer keeps attachment, send mode, model and effort
+Desktop title. The compact composer keeps attachment, model and effort
 on one row when space permits, then wraps them into touch-sized rows on phones.
 
 The app retains task ownership, history, model, permissions and Dynamic runtime.
@@ -195,11 +195,11 @@ SQLite migration tags old chats as `backend=cli-wsl`; desktop records store
 `backend=desktop`, `host_id=local` and the exact app task ID. Native Windows cwd
 values remain metadata and are never resolved as Linux paths.
 
-- The first remote creation in a project bootstraps one dedicated native
-  **Tunnel Chat · project** controller task. Later creations reuse it, keeping
-  internal create requests out of ordinary task histories. Creation runs as a
-  background job and reports controller, creation and linking progress so a long
-  Desktop operation does not hold the public HTTPS request open.
+- Remote creation reuses the selected idle source task to make exactly one new
+  native task. The internal create turn is filtered from the web history, and the
+  operation ID prevents an uncertain retry from creating the target twice.
+  Creation runs as a background job and reports source, creation and linking
+  progress so a long Desktop operation does not hold the public HTTPS request open.
 - The first prompt uses the same resumable chunk transport as ordinary turns, so
   company proxies never receive it as one large query parameter. Attach files
   after the new task has been connected.
@@ -207,6 +207,10 @@ values remain metadata and are never resolved as Linux paths.
   patches; the browser refreshes its projection every 1.5 seconds. Unchanged polls
   return only a revision marker, and transient failures keep the last snapshot while
   retrying with backoff. Normal polling does not reload history or call a model.
+- Message footers show the native event time and provide one-click copying. The
+  task header includes the Git branch when Codex Desktop reports one. Assistant
+  messages expose their structured memory citations in a collapsible section;
+  no citation section is invented when the app supplies no citation metadata.
 - Press **Gửi** and the page derives the operation from the live snapshot: it
   starts a new turn while idle or steers the exact active turn. From that moment, the chat
   loader reports attachment upload, chunked prompt upload, Desktop handoff and
