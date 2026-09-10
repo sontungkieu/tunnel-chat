@@ -348,6 +348,7 @@ class DesktopTests(unittest.TestCase):
             self.assertIn(b'id="projectDialog"', get("/codex")[1])
             self.assertIn(b'data-action="rename"', get("/codex")[1])
             self.assertIn(b'<label class="file-button" title=', get("/codex")[1])
+            self.assertNotIn(b'id="mode"', get("/codex")[1])
             self.assertIn(b'<span class="sr-only">', get("/codex")[1])
             self.assertEqual(get("/static/desktop.js")[0],200)
             self.assertEqual(get("/static/rich-text.js")[0],200)

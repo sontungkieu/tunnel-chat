@@ -164,13 +164,12 @@ function renderContextUsage(usage) {
 initializeGenerationControls();
 function updateControls() {
   const unavailable=busy || !token,draft=!!newProjectDraft;
-  const canConfigure=!unavailable && (draft || (!!snapshot && snapshot.status!=="running" && $("mode").value==="start"));
+  const canConfigure=!unavailable && (draft || (!!snapshot && snapshot.status!=="running" && !snapshot.activeTurnId));
   $("send").disabled=unavailable || (!snapshot && !draft);
   $("stop").disabled=unavailable || draft || !snapshot?.activeTurnId;
   $("thread").disabled=unavailable;
   $("linkButton").disabled=unavailable;
   $("files").disabled=unavailable || draft;
-  $("mode").disabled=unavailable || draft;
   $("modelSelect").disabled=!canConfigure;
   $("effortSelect").disabled=!canConfigure;
   $("prompt").disabled=unavailable || (!snapshot && !draft);
@@ -224,7 +223,7 @@ function renderCreateDraft() {
   $("messages").replaceChildren(textElement("div","Nhập yêu cầu đầu tiên, chọn model và effort nếu cần, rồi bấm Gửi.","empty create-empty"));
   updateScrollLatest();
   $("requests").replaceChildren();$("files").value="";$("filesLabel").textContent="Có thể đính kèm sau khi task được tạo.";
-  $("mode").value="start";generationChat=0;$("modelSelect").value="";rebuildEffortChoices();
+  generationChat=0;$("modelSelect").value="";rebuildEffortChoices();
   $("modelSelect").options[0].textContent="Mặc định của app";
   $("effortSelect").options[0].textContent="Mặc định của app";
   updateControls();$("prompt").focus();
@@ -847,14 +846,11 @@ $("composer").onsubmit=async event=>{
   event.preventDefault();
   if(busy || (!snapshot && !newProjectDraft)) return;
   const draft=newProjectDraft,chatId=draft?.sourceChatId || active;
-  const mode=draft ? "start" : $("mode").value,expectedTurnId=draft ? null : snapshot.activeTurnId;
   const body=$("prompt").value.trim(), files=Array.from($("files").files);
   if(!body && !files.length) return;
   const text=!draft && pendingQuote?.chatId===chatId
     ? (window.TunnelSelectionQuote?.buildPrompt(pendingQuote.text,body) || body) : body;
   if(draft && files.length){notice("Hãy tạo task trước, rồi đính kèm file ở lượt tiếp theo.");return;}
-  if(!draft && snapshot.status==="running" && mode!=="steer"){notice("Task đang chạy. Chọn gửi chỉ dẫn hoặc chờ lượt này kết thúc.");return;}
-  if(!draft && mode==="steer" && !expectedTurnId){notice("Không có lượt đang chạy để gửi chỉ dẫn.");return;}
   setBusy(true);notice();
   const operation_id=operationId();
   const sendStartedAt=performance.now(),elapsed=()=>Math.max(0,(performance.now()-sendStartedAt)/1000);
@@ -863,6 +859,9 @@ $("composer").onsubmit=async event=>{
   setChatLoading(true,{label:"Đang chuẩn bị gửi tin nhắn",elapsed:elapsed()});
   try {
     while(polling)await wait(50);
+    const expectedTurnId=draft ? null : snapshot.activeTurnId;
+    const mode=expectedTurnId ? "steer" : "start";
+    if(!draft && snapshot.status==="running" && !expectedTurnId)throw new Error("Đang đồng bộ lượt hiện tại. Hãy gửi lại sau khi trạng thái cập nhật.");
     setChatLoading(true,{label:"Đang chuẩn bị gửi tin nhắn",elapsed:elapsed()});
     const attachment_ids=[];
     const totalFileBytes=files.reduce((sum,file)=>sum+file.size,0);
@@ -920,7 +919,6 @@ $("composer").onsubmit=async event=>{
   } finally {if(!pendingMediaRevision)setChatLoading(false);setBusy(false);}
 };
 $("prompt").onkeydown=event=>{if((event.ctrlKey || event.metaKey)&&event.key==="Enter"){event.preventDefault();$("composer").requestSubmit();}};
-$("mode").onchange=updateControls;
 $("stop").onclick=async()=>{
   if(!snapshot?.activeTurnId || busy)return;
   setBusy(true);notice();

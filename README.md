@@ -207,8 +207,8 @@ values remain metadata and are never resolved as Linux paths.
   patches; the browser refreshes its projection every 1.5 seconds. Unchanged polls
   return only a revision marker, and transient failures keep the last snapshot while
   retrying with backoff. Normal polling does not reload history or call a model.
-- Send a new turn while idle. To steer a running turn, explicitly select
-  **Chỉ dẫn cho lượt đang chạy**. From the moment **Gửi** is pressed, the chat
+- Press **Gửi** and the page derives the operation from the live snapshot: it
+  starts a new turn while idle or steers the exact active turn. From that moment, the chat
   loader reports attachment upload, chunked prompt upload, Desktop handoff and
   final conversation synchronization. Long prompts and files show byte/chunk
   progress instead of leaving the page in an indistinguishable busy state.
