@@ -87,10 +87,15 @@ Tunnel và lưu launcher URL mà không đưa token vào câu trả lời của 
 ./bin/url files
 ./bin/stop
 ./bin/start
+./bin/start-all
 ```
 
 `./bin/doctor` chỉ báo version, mode và PID; nó không in token hay mật khẩu.
 `./bin/stop` dừng server, gateway và tunnel của checkout này.
+`./bin/start-all` bật thêm browser bridge ChatGPT và kiểm tra health trước khi
+trả về. Trên Windows, chạy `windows/install-start-shortcut.ps1` từ PowerShell để
+tạo icon **Tunnel Chat - Start All** ở Desktop. Icon bật toàn bộ stack rồi mở `/codex`;
+log khởi động nằm tại `%LOCALAPPDATA%\TunnelChat\start.log`.
 
 Để cập nhật source:
 

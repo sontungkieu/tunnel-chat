@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+export PATH="$ROOT/.tools:$PATH"
+
+./bin/chat-web-start
+
+set -a
+source .env.local
+set +a
+
+native_port="${CHAT_WEB_NATIVE_PORT:-3000}"
+native_ready=0
+for _ in $(seq 1 40); do
+    if curl --fail --silent --show-error --max-time 2 \
+        "http://127.0.0.1:${native_port}/chat/api/status" >/dev/null 2>&1; then
+        native_ready=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$native_ready" -ne 1 ]; then
+    echo "ChatGPT browser bridge did not become healthy; inspect logs/chat-web-native.log" >&2
+    exit 1
+fi
+
+./bin/start
+./bin/doctor --desktop
+
+echo "All Tunnel Chat services are ready."
+echo "Run ./bin/url codex when you need a browser link."

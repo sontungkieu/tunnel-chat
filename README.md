@@ -86,6 +86,18 @@ From the checkout root:
 ```
 
 `./bin/start` launches the server, gateway and Quick Tunnel for a fresh clone.
+Use `./bin/start-all` to start the independent ChatGPT browser bridge as well
+and verify both local services. On Windows, install a
+one-click Desktop shortcut from PowerShell:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File "\\wsl.localhost\Ubuntu\home\<user>\tunnel-chat\windows\install-start-shortcut.ps1"
+```
+
+The shortcut is named **Tunnel Chat - Start All**. It starts WSL even when it is stopped,
+keeps already-running services in place, writes startup diagnostics to
+`%LOCALAPPDATA%\TunnelChat\start.log`, and opens `/codex` only after the health
+checks pass. Re-run the installer after updating the Windows launcher scripts.
 The tunnel can also be started explicitly:
 
 ```bash
