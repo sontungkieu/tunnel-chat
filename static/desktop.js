@@ -163,7 +163,8 @@ function renderContextUsage(usage) {
 initializeGenerationControls();
 function updateControls() {
   const unavailable=busy || !token,draft=!!newProjectDraft;
-  const canConfigure=!unavailable && (draft || (!!snapshot && snapshot.status!=="running" && !snapshot.activeTurnId));
+  const running=!!snapshot && snapshot.status==="running",queueing=running && $("deliverySelect").value==="queue";
+  const canConfigure=!unavailable && (draft || (!!snapshot && (!running || queueing)));
   $("send").disabled=unavailable || (!snapshot && !draft);
   $("stop").disabled=unavailable || draft || !snapshot?.activeTurnId;
   $("thread").disabled=unavailable;
@@ -171,6 +172,8 @@ function updateControls() {
   $("files").disabled=unavailable || draft;
   $("modelSelect").disabled=!canConfigure;
   $("effortSelect").disabled=!canConfigure;
+  $("deliveryControl").hidden=unavailable || draft || !running;
+  $("deliverySelect").disabled=unavailable || draft || !running;
   $("prompt").disabled=unavailable || (!snapshot && !draft);
   $("reconnect").disabled=unavailable || draft;
   $("logout").disabled=busy;
@@ -184,6 +187,7 @@ function updateControls() {
   document.querySelectorAll("#taskList button").forEach(b=>b.disabled=busy);
 }
 function setBusy(value) {busy=value;updateControls();}
+$("deliverySelect").onchange=updateControls;
 async function loadTask(payload) {
   setChatLoading(true,{stage:"queued"});
   try {
@@ -501,6 +505,7 @@ function renderState(state) {
     activityLabels[state.activity] || (state.status==="running"?"Agent đang làm việc":"Sẵn sàng"));
   updateTaskIndicator({id:active,live:true,...state},true);
   updateControls();
+  renderMessageQueue(state.queue || []);
   const next=JSON.stringify(state.messages);
   if(next!==messageKey) {
     const initialMessageRender=!messageKey;
@@ -556,6 +561,34 @@ function renderState(state) {
   const requests=JSON.stringify(state.requests);
   if(requests!==requestKey) {renderRequests(state.requests);requestKey=requests;}
   updateScrollLatest();
+}
+const queueStatusLabels={queued:"Chờ lượt hiện tại xong",sending:"Đang gửi",uncertain:"Chưa rõ đã gửi",failed:"Gửi thất bại"};
+function renderMessageQueue(items) {
+  const panel=$("messageQueue"),container=$("messageQueueItems"),visible=Array.isArray(items)?items:[];
+  panel.hidden=!visible.length;container.replaceChildren();
+  $("messageQueueCount").textContent=visible.length?`${visible.length} mục`:"";
+  for(const item of visible) {
+    const card=textElement("article","","queued-message");card.dataset.status=item.status || "queued";
+    const body=textElement("p",item.text || "(không có nội dung)","queued-message-text");
+    const meta=textElement("div","","queued-message-meta");
+    meta.append(textElement("span",queueStatusLabels[item.status] || item.status || "Đang chờ"));
+    const settings=[item.model,item.effort].filter(Boolean).join(" · ");if(settings)meta.append(textElement("span",settings));
+    if(Array.isArray(item.attachment_ids) && item.attachment_ids.length)
+      meta.append(textElement("span",`${item.attachment_ids.length} tệp`));
+    const created=formatMessageTime(item.created_at);if(created)meta.append(textElement("span",created));
+    card.append(body,meta);
+    if(item.error)card.append(textElement("p",item.error,"queued-message-error"));
+    if(item.status==="queued") {
+      const cancel=textElement("button","Hủy","secondary queued-message-cancel");cancel.type="button";
+      cancel.onclick=async()=>{
+        if(busy)return;setBusy(true);notice();
+        try {await rpc("queue/cancel",{chat_id:active,queue_id:item.id});await refresh();notice("Đã hủy tin nhắn trong hàng đợi.");}
+        catch(error){notice(error.message);}finally{setBusy(false);}
+      };
+      card.append(cancel);
+    }
+    container.append(card);
+  }
 }
 async function reply(request,data) {
   if (busy) return;
@@ -813,7 +846,10 @@ async function list() {
       button.dataset.chatId=String(chat.id);button.disabled=busy;button.title=chat.title;
       button.setAttribute("aria-haspopup","menu");button.setAttribute("aria-expanded","false");
       const taskTitle=textElement("span",chat.title,"task-title"),indicator=textElement("span","","task-indicator");
-      indicator.hidden=true;indicator.setAttribute("aria-hidden","true");button.append(taskTitle,indicator);
+      indicator.hidden=true;indicator.setAttribute("aria-hidden","true");button.append(taskTitle);
+      if(Number(chat.queued_count)>0)button.append(textElement("span",String(chat.queued_count),"task-queue-count"));
+      button.append(indicator);
+      if(Number(chat.queued_count)>0)button.setAttribute("aria-label",`${chat.title}, ${chat.queued_count} tin nhắn đang xếp hàng`);
       button.onclick=()=>selectChat(chat);
       button.oncontextmenu=event=>openTaskMenu(event,chat,group,button);
       button.onkeydown=event=>{
@@ -852,7 +888,9 @@ async function refresh(force=false) {
     const state=(force || !snapshot)
       ? (await loadTask({chat_id:selected,refresh:force})).state
       : await rpc("state",{chat_id:selected,refresh:false,since_revision:snapshot.revision},{attempts:3});
-    if(selected===active && !state.unchanged)renderState(state);
+    if(selected===active) {
+      if(state.unchanged)renderMessageQueue(state.queue || []);else renderState(state);
+    }
     refreshFailures=0;refreshRetryAt=0;
     if(refreshNotice){notice();refreshNotice=false;}
     await syncSidebarStatuses();
@@ -908,9 +946,11 @@ $("composer").onsubmit=async event=>{
   setChatLoading(true,{label:"Đang chuẩn bị gửi tin nhắn",elapsed:elapsed()});
   try {
     while(polling)await wait(50);
-    const expectedTurnId=draft ? null : snapshot.activeTurnId;
+    const running=!draft && snapshot.status==="running";
+    const delivery=running ? $("deliverySelect").value : "now";
+    const expectedTurnId=running && delivery==="now" ? snapshot.activeTurnId : null;
     const mode=expectedTurnId ? "steer" : "start";
-    if(!draft && snapshot.status==="running" && !expectedTurnId)throw new Error("Đang đồng bộ lượt hiện tại. Hãy gửi lại sau khi trạng thái cập nhật.");
+    if(running && delivery==="now" && !expectedTurnId)throw new Error("Đang đồng bộ lượt hiện tại. Hãy gửi lại sau khi trạng thái cập nhật.");
     setChatLoading(true,{label:"Đang chuẩn bị gửi tin nhắn",elapsed:elapsed()});
     const attachment_ids=[];
     const totalFileBytes=files.reduce((sum,file)=>sum+file.size,0);
@@ -929,7 +969,8 @@ $("composer").onsubmit=async event=>{
       attachment_ids.push(uploaded.attachment.id);
       sentFileBytes+=file.size;
     }
-    const sendData={chat_id:chatId,mode,expectedTurnId,operation_id,attachment_ids};
+    const sendData={chat_id:chatId,mode,expectedTurnId,operation_id,attachment_ids,
+      delivery:running && delivery==="queue"?"queue":"now"};
     if(draft){sendData.create=true;if(draft.targetProjectPath)sendData.project_path=draft.targetProjectPath;}
     if(mode==="start") {
       if($("modelSelect").value)sendData.model=$("modelSelect").value;
@@ -960,6 +1001,7 @@ $("composer").onsubmit=async event=>{
     } else {
       setChatLoading(true,{label:"Đang đồng bộ tin nhắn vào hội thoại",elapsed:elapsed(),detail:"Đang nhận snapshot mới"});
       await refresh();
+      if(submitted.queued)notice("Đã xếp tin nhắn thành lượt mới. Tunnel Chat sẽ tự gửi khi task rảnh.");
     }
     $("prompt").value="";$("files").value="";$("filesLabel").textContent="";clearPendingQuote();
   } catch(e) {

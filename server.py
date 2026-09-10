@@ -4155,6 +4155,7 @@ def serve() -> None:
         raise RuntimeError("CHAT_ACCESS_TOKEN is missing")
     cleanup_expired_uploads()
     reconcile_codex_runs()
+    desktop.start_queue_worker(sys.modules[__name__])
     threading.Thread(target=upload_cleanup_loop, name="upload-cleanup", daemon=True).start()
     print(f"serving http://{config['host']}:{port}", flush=True)
     server.serve_forever()

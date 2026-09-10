@@ -211,15 +211,19 @@ values remain metadata and are never resolved as Linux paths.
   task header includes the Git branch when Codex Desktop reports one. Assistant
   messages expose their structured memory citations in a collapsible section;
   no citation section is invented when the app supplies no citation metadata.
-- Press **Gửi** and the page derives the operation from the live snapshot: it
-  starts a new turn while idle or steers the exact active turn. From that moment, the chat
+- Press **Gửi** while idle to start a new turn. While an agent is running, choose
+  **Xếp hàng** (the default) to save a separate next turn or **Gửi ngay** to steer
+  the exact active turn. Queued prompts, attachment references, model and effort
+  are persisted in local SQLite; a backend worker sends them in order when the
+  target task becomes idle, even if the browser tab has closed. The queue can be
+  inspected and cancelled above the composer. From submission onward, the chat
   loader reports attachment upload, chunked prompt upload, Desktop handoff and
   final conversation synchronization. Long prompts and files show byte/chunk
   progress instead of leaving the page in an indistinguishable busy state.
-- Before a new turn, choose a model and reasoning effort or leave either selector
-  on **Theo task** to inherit the task's current setting. The controls are locked
-  while steering an active turn. Codex Desktop still enforces model availability
-  for the signed-in account.
+- Before a new or queued turn, choose a model and reasoning effort or leave either
+  selector on **Theo task** to inherit the task's current setting. The controls are
+  locked only while **Gửi ngay** is selected for an active turn. Codex Desktop
+  still enforces model availability for the signed-in account.
 - The task header shows the latest context token count, model context window,
   remaining tokens, cumulative compaction count and live compaction state from
   the Desktop snapshot. Codex Desktop does not expose its next automatic compact

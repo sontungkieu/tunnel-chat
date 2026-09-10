@@ -105,6 +105,10 @@
       </div>
     </div>
     <section id="requests" aria-label="Yêu cầu chờ trả lời"></section>
+    <section id="messageQueue" class="message-queue" aria-label="Tin nhắn chờ gửi" hidden>
+      <header><strong>Hàng đợi tin nhắn</strong><span id="messageQueueCount" class="muted small"></span></header>
+      <div id="messageQueueItems"></div>
+    </section>
     <form id="composer">
       <div class="composer-shell">
         <div id="quoteContext" class="quote-context" hidden>
@@ -122,6 +126,13 @@
           </div>
           <span class="composer-spacer"></span>
           <button type="button" id="stop" class="danger" disabled>Dừng lượt</button>
+          <label id="deliveryControl" class="delivery-control" title="Chọn xếp thành lượt mới hoặc gửi ngay vào lượt đang chạy" hidden>
+            <span class="sr-only">Cách gửi khi agent đang chạy</span>
+            <select id="deliverySelect" aria-label="Cách gửi khi agent đang chạy">
+              <option value="queue">Xếp hàng</option>
+              <option value="now">Gửi ngay</option>
+            </select>
+          </label>
           <button id="send" disabled>Gửi <span aria-hidden="true">↑</span></button>
         </footer>
       </div>

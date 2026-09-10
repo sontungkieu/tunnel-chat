@@ -217,6 +217,15 @@ class Bridge:
 BRIDGE = Bridge()
 atexit.register(BRIDGE.close)
 
+QUEUE_WAKE = threading.Event()
+QUEUE_WORKER_LOCK = threading.Lock()
+QUEUE_WORKER = None
+QUEUE_MODELS = {
+    "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex-spark",
+}
+QUEUE_EFFORTS = {"low", "medium", "high", "xhigh", "max", "ultra"}
+
 
 def init_schema(conn):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(codex_chats)")}
@@ -233,6 +242,14 @@ def init_schema(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS desktop_actions (
         operation_id TEXT PRIMARY KEY, chat_id INTEGER NOT NULL, action TEXT NOT NULL,
         fingerprint TEXT NOT NULL, status TEXT NOT NULL, result TEXT, created_at TEXT NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS desktop_message_queue (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+        chat_id INTEGER NOT NULL, created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL, status TEXT NOT NULL, fingerprint TEXT NOT NULL,
+        text TEXT NOT NULL, attachment_ids TEXT NOT NULL DEFAULT '[]',
+        model TEXT, effort TEXT, error TEXT, sent_at TEXT)""")
+    conn.execute("""CREATE INDEX IF NOT EXISTS desktop_message_queue_pending
+                 ON desktop_message_queue(status, created_at)""")
 
 
 def require_chat(server, chat_id):
@@ -242,6 +259,166 @@ def require_chat(server, chat_id):
     return chat
 
 
+def queue_view(row) -> dict:
+    return {
+        "id": str(row["id"]), "chat_id": int(row["chat_id"]),
+        "created_at": str(row["created_at"]), "updated_at": str(row["updated_at"]),
+        "status": str(row["status"]), "text": str(row["text"]),
+        "attachment_ids": json.loads(row["attachment_ids"] or "[]"),
+        "model": row["model"], "effort": row["effort"], "error": row["error"],
+    }
+
+
+def list_message_queue(server, chat_id: int) -> list[dict]:
+    require_chat(server, chat_id)
+    with server.connect() as conn:
+        rows = conn.execute("""SELECT * FROM desktop_message_queue
+            WHERE chat_id=? AND status NOT IN ('sent','cancelled')
+            ORDER BY sequence LIMIT 50""", (chat_id,)).fetchall()
+    return [queue_view(row) for row in rows]
+
+
+def enqueue_message(server, chat_id: int, data: dict) -> dict:
+    require_chat(server, chat_id)
+    item_id = str(data.get("operation_id") or "")
+    if not UUID_PATTERN.fullmatch(item_id):
+        raise ValueError("A unique operation_id is required")
+    text = str(data.get("text") or "").strip()
+    attachment_ids = server.parse_id_list(data.get("attachment_ids"))
+    if not text and not attachment_ids:
+        raise ValueError("Empty message")
+    if len(text.encode()) > server.MAX_CODEX_PROMPT_BYTES:
+        raise ValueError("Prompt exceeds size limit")
+    if attachment_ids:
+        attachments = server.get_codex_attachments(chat_id, attachment_ids)
+        if {int(item["id"]) for item in attachments} != set(attachment_ids):
+            raise ValueError("An attachment does not belong to this task")
+    model = str(data.get("model") or "").strip() or None
+    effort = str(data.get("effort") or "").strip() or None
+    if model and model not in QUEUE_MODELS:
+        raise ValueError("Invalid model")
+    if effort and effort not in QUEUE_EFFORTS:
+        raise ValueError("Invalid reasoning effort")
+    canonical = {"chat_id": chat_id, "text": text, "attachment_ids": attachment_ids,
+                 "model": model, "effort": effort}
+    fingerprint = hashlib.sha256(json.dumps(
+        canonical, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    now = server.now_iso()
+    with server.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        old = conn.execute("SELECT * FROM desktop_message_queue WHERE id=?", (item_id,)).fetchone()
+        if old:
+            if old["fingerprint"] != fingerprint:
+                raise ValueError("operation_id was already used for another queued message")
+            return queue_view(old)
+        conn.execute("""INSERT INTO desktop_message_queue
+            (id,chat_id,created_at,updated_at,status,fingerprint,text,attachment_ids,model,effort)
+            VALUES (?,?,?,?, 'queued',?,?,?,?,?)""",
+            (item_id, chat_id, now, now, fingerprint, text,
+             json.dumps(attachment_ids), model, effort))
+        conn.commit()
+        row = conn.execute("SELECT * FROM desktop_message_queue WHERE id=?", (item_id,)).fetchone()
+    QUEUE_WAKE.set()
+    server.notify_event()
+    return queue_view(row)
+
+
+def cancel_queued_message(server, chat_id: int, item_id: object) -> dict:
+    require_chat(server, chat_id)
+    item_id = str(item_id or "")
+    if not UUID_PATTERN.fullmatch(item_id):
+        raise ValueError("Invalid queued message ID")
+    with server.connect() as conn:
+        changed = conn.execute("""UPDATE desktop_message_queue
+            SET status='cancelled',updated_at=? WHERE id=? AND chat_id=? AND status='queued'""",
+            (server.now_iso(), item_id, chat_id))
+        conn.commit()
+    if changed.rowcount != 1:
+        raise ValueError("Queued message is no longer waiting")
+    server.notify_event()
+    return {"ok": True}
+
+
+def drain_message_queue_once(server) -> bool:
+    with server.connect() as conn:
+        rows = conn.execute("""SELECT q.*,c.codex_session_id FROM desktop_message_queue q
+            JOIN codex_chats c ON c.id=q.chat_id
+            WHERE q.status='queued' AND c.backend='desktop' AND c.host_id='local'
+            ORDER BY q.sequence LIMIT 32""").fetchall()
+    if not rows:
+        return False
+    try:
+        summaries = BRIDGE.call(server.load_config(), "summaries", data={
+            "threadIds": list(dict.fromkeys(str(row["codex_session_id"]) for row in rows))
+        }, timeout=10)
+    except ValueError:
+        return False
+    if not isinstance(summaries, dict):
+        return False
+    selected = next((row for row in rows
+        if isinstance(summaries.get(str(row["codex_session_id"])), dict)
+        and summaries[str(row["codex_session_id"])].get("status") == "idle"), None)
+    if selected is None:
+        return False
+    now = server.now_iso()
+    with server.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        claimed = conn.execute("""UPDATE desktop_message_queue SET status='sending',updated_at=?,error=NULL
+            WHERE id=? AND status='queued'""", (now, selected["id"]))
+        conn.commit()
+    if claimed.rowcount != 1:
+        return False
+    try:
+        payload = {"operation_id": str(selected["id"]), "mode": "start",
+                   "text": str(selected["text"]),
+                   "attachment_ids": json.loads(selected["attachment_ids"] or "[]")}
+        if selected["model"]:
+            payload["model"] = str(selected["model"])
+        if selected["effort"]:
+            payload["effort"] = str(selected["effort"])
+        mutate(server, int(selected["chat_id"]), "send", payload)
+    except Exception as exc:
+        with server.connect() as conn:
+            conn.execute("""UPDATE desktop_message_queue
+                SET status='uncertain',updated_at=?,error=? WHERE id=?""",
+                (server.now_iso(), str(exc)[:1000], selected["id"]))
+            conn.commit()
+    else:
+        with server.connect() as conn:
+            conn.execute("""UPDATE desktop_message_queue
+                SET status='sent',updated_at=?,sent_at=? WHERE id=?""",
+                (server.now_iso(), server.now_iso(), selected["id"]))
+            conn.commit()
+    server.notify_event()
+    return True
+
+
+def queue_worker(server) -> None:
+    while True:
+        try:
+            worked = drain_message_queue_once(server)
+        except Exception:
+            worked = False
+        QUEUE_WAKE.wait(0.75 if worked else 2.0)
+        QUEUE_WAKE.clear()
+
+
+def start_queue_worker(server) -> None:
+    global QUEUE_WORKER
+    with QUEUE_WORKER_LOCK:
+        if QUEUE_WORKER and QUEUE_WORKER.is_alive():
+            return
+        with server.connect() as conn:
+            conn.execute("""UPDATE desktop_message_queue SET status='uncertain',updated_at=?,
+                error='Tunnel Chat restarted while delivery was in progress; delivery was not replayed.'
+                WHERE status='sending'""", (server.now_iso(),))
+            conn.commit()
+        QUEUE_WORKER = threading.Thread(
+            target=queue_worker, args=(server,), name="desktop-message-queue", daemon=True)
+        QUEUE_WORKER.start()
+        QUEUE_WAKE.set()
+
+
 def state(server, chat_id, refresh=False, progress=None, since_revision=None):
     chat = require_chat(server, chat_id)
     bridge_data = ({"sinceRevision": since_revision}
@@ -249,6 +426,7 @@ def state(server, chat_id, refresh=False, progress=None, since_revision=None):
                    else None)
     result = BRIDGE.call(server.load_config(), "state", chat["codex_session_id"], refresh=refresh,
                          data=bridge_data, progress=progress, timeout=240)
+    result["queue"] = list_message_queue(server, chat_id)
     if result.get("unchanged") is True:
         return result
     prepare_state_images(server, chat_id, result)
@@ -565,6 +743,11 @@ def list_chats(server):
     with server.connect() as conn:
         chats=[dict(row) for row in conn.execute(
             "SELECT * FROM codex_chats WHERE backend='desktop' AND hidden=0 ORDER BY updated_at DESC")]
+        queue_counts={int(row["chat_id"]):int(row["total"]) for row in conn.execute("""
+            SELECT chat_id,COUNT(*) AS total FROM desktop_message_queue
+            WHERE status IN ('queued','sending') GROUP BY chat_id""")}
+    for chat in chats:
+        chat["queued_count"] = queue_counts.get(int(chat["id"]), 0)
     live={}
     if chats:
         try:
@@ -616,6 +799,12 @@ def dispatch(server, action, data):
         return unlink(server,chat_id)
     if action == "rename":
         return rename(server,chat_id,data.get("title"))
+    if action == "queue/list":
+        return {"queue": list_message_queue(server, chat_id)}
+    if action == "queue/cancel":
+        return cancel_queued_message(server, chat_id, data.get("queue_id"))
+    if action == "queue":
+        return {"ok": True, "queued": enqueue_message(server, chat_id, data)}
     if action in {"send","cancel","reply"}:
         return mutate(server,chat_id,action,data)
     if action == "prompt/finish":
@@ -627,6 +816,8 @@ def dispatch(server, action, data):
             payload={**data,"text":prompt,"attachment_ids":attachments}
             if data.get("create"):
                 outcome.update(start_create(server,chat_id,payload,prompt))
+            elif data.get("delivery") == "queue":
+                outcome.update(ok=True,queued=enqueue_message(server,chat_id,payload))
             else:
                 mutate(server,chat_id,"send",payload)
                 outcome.update(ok=True)

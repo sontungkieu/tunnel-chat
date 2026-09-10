@@ -118,7 +118,7 @@ class DesktopTests(unittest.TestCase):
         with mock.patch.object(server,"load_config",return_value={"desktop_enabled":"1"}), \
              mock.patch.object(desktop.BRIDGE,"call",return_value=unchanged) as call:
             result=desktop.dispatch(server,"state",{"chat_id":chat,"since_revision":17})
-        self.assertEqual(result,unchanged)
+        self.assertEqual(result,{**unchanged,"queue":[]})
         call.assert_called_once_with({"desktop_enabled":"1"},"state",row["codex_session_id"],
             refresh=False,data={"sinceRevision":17},progress=None,timeout=240)
 
@@ -153,6 +153,44 @@ class DesktopTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"timeout"):desktop.mutate(server,chat,"cancel",data)
             with self.assertRaisesRegex(ValueError,"uncertain"):desktop.mutate(server,chat,"cancel",data)
             call.assert_called_once()
+
+    def test_message_queue_is_persistent_idempotent_and_cancellable(self):
+        chat=self.chat();operation=str(uuid.uuid4())
+        payload={"operation_id":operation,"text":"next task","model":"gpt-6-astra","effort":"high"}
+        first=desktop.enqueue_message(server,chat,payload)
+        second=desktop.enqueue_message(server,chat,payload)
+        self.assertEqual(first,second)
+        self.assertEqual(first["status"],"queued")
+        self.assertEqual(desktop.list_message_queue(server,chat)[0]["text"],"next task")
+        with mock.patch.object(desktop.BRIDGE,"call",return_value={}):
+            self.assertEqual(desktop.list_chats(server)[0]["queued_count"],1)
+        with self.assertRaisesRegex(ValueError,"another queued message"):
+            desktop.enqueue_message(server,chat,{**payload,"text":"different"})
+        self.assertEqual(desktop.cancel_queued_message(server,chat,operation),{"ok":True})
+        self.assertEqual(desktop.list_message_queue(server,chat),[])
+
+    def test_queue_waits_for_idle_then_starts_exactly_one_new_turn(self):
+        chat=self.chat();row=server.get_codex_chat(chat);operation=str(uuid.uuid4())
+        desktop.enqueue_message(server,chat,{"operation_id":operation,"text":"queued prompt",
+            "model":"gpt-6-astra","effort":"ultra"})
+        running={row["codex_session_id"]:{"status":"running"}}
+        with mock.patch.object(desktop.BRIDGE,"call",return_value=running) as call:
+            self.assertFalse(desktop.drain_message_queue_once(server))
+            call.assert_called_once()
+        idle={row["codex_session_id"]:{"status":"idle"}}
+        with mock.patch.object(desktop.BRIDGE,"call",side_effect=[idle,{"ok":True}]) as call:
+            self.assertTrue(desktop.drain_message_queue_once(server))
+        self.assertEqual(call.call_count,2)
+        send=call.call_args_list[1]
+        self.assertEqual(send.args[1],"send")
+        self.assertEqual(send.args[3]["mode"],"start")
+        self.assertEqual(send.args[3]["text"],"queued prompt")
+        self.assertEqual(send.args[3]["model"],"gpt-6-astra")
+        self.assertEqual(send.args[3]["effort"],"ultra")
+        self.assertEqual(desktop.list_message_queue(server,chat),[])
+        with server.connect() as conn:
+            self.assertEqual(conn.execute("SELECT status FROM desktop_message_queue WHERE id=?",
+                                          (operation,)).fetchone()[0],"sent")
 
     def test_task_creation_uses_one_target_and_deduplicates(self):
         source=self.chat();child=str(uuid.uuid4())
@@ -220,6 +258,21 @@ class DesktopTests(unittest.TestCase):
         start.assert_called_once()
         self.assertEqual(start.call_args.args[2]["operation_id"],operation)
         self.assertEqual(start.call_args.args[3],body.decode())
+
+    def test_chunked_prompt_can_be_queued_instead_of_steering(self):
+        chat=self.chat(status="running");body=b"send this after the active turn"
+        upload=server.create_codex_prompt_upload(chat,len(body),1,[])
+        encoded=base64.urlsafe_b64encode(body).decode().rstrip("=")
+        server.add_codex_prompt_chunk(upload,0,encoded)
+        operation=str(uuid.uuid4())
+        with mock.patch.object(server,"load_config",return_value={"desktop_enabled":"1"}):
+            result=desktop.dispatch(server,"prompt/finish",{
+                "chat_id":chat,"upload_id":upload,"delivery":"queue",
+                "operation_id":operation,"mode":"start","model":"gpt-6-astra","effort":"high"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["queued"]["status"],"queued")
+        self.assertEqual(result["queued"]["text"],body.decode())
+        self.assertEqual(result["queued"]["model"],"gpt-6-astra")
 
     def test_attachment_ownership_checked_before_staging(self):
         chat=self.chat()
@@ -341,6 +394,8 @@ class DesktopTests(unittest.TestCase):
             self.assertIn(b'id="quoteContext"', get("/codex")[1])
             self.assertIn(b'id="chatLoader"', get("/codex")[1])
             self.assertIn(b'id="chatLoaderProgress"', get("/codex")[1])
+            self.assertIn(b'id="messageQueue"', get("/codex")[1])
+            self.assertIn(b'id="deliverySelect"', get("/codex")[1])
             self.assertIn(b'id="scrollLatest"', get("/codex")[1])
             self.assertIn(b'id="newProject"', get("/codex")[1])
             self.assertIn(b'id="projectDialog"', get("/codex")[1])
