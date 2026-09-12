@@ -112,6 +112,14 @@ class DesktopTests(unittest.TestCase):
         call.assert_called_once_with({"desktop_enabled":"1"},"summaries",
             data={"threadIds":[row["codex_session_id"]]},timeout=5)
 
+    def test_account_usage_does_not_require_a_selected_chat(self):
+        usage={"limits":[{"id":"codex","name":"Codex","windows":[
+            {"usedPercent":38,"windowDurationMins":10080,"resetsAt":1789725019}]}]}
+        with mock.patch.object(server,"load_config",return_value={"desktop_enabled":"1"}), \
+             mock.patch.object(desktop.BRIDGE,"call",return_value=usage) as call:
+            self.assertEqual(desktop.dispatch(server,"usage",{}),usage)
+        call.assert_called_once_with({"desktop_enabled":"1"},"usage",timeout=20)
+
     def test_state_forwards_revision_and_returns_compact_unchanged_result(self):
         chat=self.chat();row=server.get_codex_chat(chat)
         unchanged={"unchanged":True,"revision":17}
@@ -397,6 +405,9 @@ class DesktopTests(unittest.TestCase):
             self.assertIn(b'id="messageQueue"', get("/codex")[1])
             self.assertIn(b'id="deliverySelect"', get("/codex")[1])
             self.assertIn(b'id="scrollLatest"', get("/codex")[1])
+            self.assertIn(b'id="taskUsage"', get("/codex")[1])
+            self.assertIn(b'id="accountUsage"', get("/codex")[1])
+            self.assertIn(b'id="usageRefresh"', get("/codex")[1])
             self.assertIn(b'id="newProject"', get("/codex")[1])
             self.assertIn(b'id="projectDialog"', get("/codex")[1])
             self.assertIn(b'data-action="rename"', get("/codex")[1])

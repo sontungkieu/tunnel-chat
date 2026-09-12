@@ -10,6 +10,7 @@ let refreshFailures = 0, refreshRetryAt = 0, refreshNotice = false;
 let messageImageUrls = [], imageRenderRevision = 0, pendingMediaRevision = 0, sidebarSyncAt = 0;
 let collapsedProjects = new Set(), taskReadState = {}, newProjectDraft = null, taskMenuContext = null, listedChats = [];
 let pendingQuote = null, selectionCandidate = null, selectionTimer = 0;
+let usageLoading = false;
 try {collapsedProjects=new Set(JSON.parse(sessionStorage.getItem("desktopCollapsedProjects") || "[]"));} catch(_error) {}
 try {
   const saved=JSON.parse(localStorage.getItem("desktopTaskReadState") || "{}");
@@ -151,13 +152,31 @@ function syncGenerationControls(state) {
   $("effortSelect").options[0].textContent=`Theo task · ${state.effort || "mặc định"}`;
 }
 function formatTokens(value) {
+  if(value===null || value===undefined)return "—";
   const tokens=Number(value);if(!Number.isFinite(tokens) || tokens<0)return "—";
   if(tokens>=1000000)return `${(tokens/1000000).toFixed(tokens>=10000000?0:1).replace(/\.0$/,"")}M`;
   if(tokens>=1000)return `${(tokens/1000).toFixed(tokens>=100000?0:1).replace(/\.0$/,"")}k`;
   return String(Math.round(tokens));
 }
+function renderSidebarTaskUsage(usage) {
+  const panel=$("taskUsage");
+  if(!usage || !Number.isFinite(Number(usage.usedTokens)) || !Number.isFinite(Number(usage.contextWindowTokens))) {
+    panel.hidden=true;return;
+  }
+  const used=Math.max(0,Number(usage.usedTokens)),windowTokens=Math.max(1,Number(usage.contextWindowTokens));
+  const percent=Math.max(0,Math.min(100,Number(usage.usedPercent) || used/windowTokens*100));
+  const count=Math.max(0,Math.round(Number(usage.compactionCount) || 0));
+  panel.hidden=false;panel.dataset.level=percent>=90?"critical":percent>=75?"high":"normal";
+  $("sideContextPercent").textContent=`${Math.round(percent)}%`;
+  $("sideContextTokens").textContent=`Context ${formatTokens(used)} / ${formatTokens(windowTokens)} · còn ${formatTokens(usage.remainingTokens)}`;
+  $("sideCumulativeTokens").textContent=`Tổng token đã dùng: ${formatTokens(usage.cumulativeTokens)}`;
+  $("sideCompaction").textContent=usage.compacting ? `Đang compact · đã compact ${count} lần` : `Đã compact ${count} lần`;
+  $("sideContextBar").style.width=`${percent}%`;
+  $("sideContextMeter").setAttribute("aria-valuenow",String(Math.round(percent)));
+}
 function renderContextUsage(usage) {
   const panel=$("contextUsage");
+  renderSidebarTaskUsage(usage);
   if(!usage || !Number.isFinite(Number(usage.usedTokens)) || !Number.isFinite(Number(usage.contextWindowTokens))) {
     panel.hidden=true;return;
   }
@@ -172,6 +191,52 @@ function renderContextUsage(usage) {
   $("contextCompaction").textContent=usage.compacting ? "Codex đang compact context…"
     : `${count?`Đã compact ${count} lần · `:""}Mốc compact tiếp theo do Codex tự quyết định`;
   panel.title=`Context của lượt gần nhất. Tổng token lũy kế: ${formatTokens(usage.cumulativeTokens)}. Desktop IPC không công bố compact threshold.`;
+}
+function quotaWindowLabel(minutes) {
+  const duration=Math.round(Number(minutes));
+  if(duration===300)return "5 giờ";
+  if(duration===10080)return "Tuần";
+  if(duration%1440===0)return `${duration/1440} ngày`;
+  if(duration%60===0)return `${duration/60} giờ`;
+  return `${duration} phút`;
+}
+function formatQuotaReset(seconds) {
+  const date=new Date(Number(seconds)*1000);
+  if(!Number.isFinite(date.getTime()))return "";
+  return `Đặt lại ${new Intl.DateTimeFormat("vi-VN",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}).format(date)}`;
+}
+function renderAccountUsage(data) {
+  const host=$("accountUsage"),limits=Array.isArray(data?.limits)?data.limits:[];
+  host.replaceChildren();
+  if(!limits.length) {
+    host.append(textElement("p","Codex chưa cung cấp quota cho tài khoản này.","muted small"));return;
+  }
+  for(const limit of limits) {
+    const card=textElement("section","","quota-card");
+    card.append(textElement("div",limit.name || limit.id || "Codex","quota-name"));
+    for(const window of Array.isArray(limit.windows)?limit.windows:[]) {
+      const percent=Math.max(0,Math.min(100,Number(window.usedPercent) || 0));
+      const row=textElement("div","","quota-window");
+      const heading=textElement("div","","quota-window-heading");
+      heading.append(textElement("span",quotaWindowLabel(window.windowDurationMins)),textElement("strong",`${Math.round(percent)}% đã dùng`));
+      const meter=textElement("div","","usage-meter");
+      meter.setAttribute("role","progressbar");meter.setAttribute("aria-label",`${limit.name || "Codex"}: ${quotaWindowLabel(window.windowDurationMins)}`);
+      meter.setAttribute("aria-valuemin","0");meter.setAttribute("aria-valuemax","100");meter.setAttribute("aria-valuenow",String(Math.round(percent)));
+      const bar=document.createElement("span");bar.style.width=`${percent}%`;meter.append(bar);
+      row.append(heading,meter);
+      const reset=formatQuotaReset(window.resetsAt);if(reset)row.append(textElement("div",reset,"quota-reset"));
+      card.append(row);
+    }
+    host.append(card);
+  }
+}
+async function loadAccountUsage() {
+  if(usageLoading || !token)return;
+  usageLoading=true;const button=$("usageRefresh");button.disabled=true;
+  if(!$("accountUsage").querySelector(".quota-card"))$("accountUsage").replaceChildren(textElement("p","Đang tải quota…","muted small"));
+  try {renderAccountUsage(await rpc("usage",{}, {attempts:2}));}
+  catch(error) {$("accountUsage").replaceChildren(textElement("p",`Không đọc được quota: ${error.message}`,"muted small"));}
+  finally {usageLoading=false;button.disabled=false;}
 }
 initializeGenerationControls();
 function updateControls() {
@@ -203,6 +268,7 @@ function updateControls() {
 }
 function setBusy(value) {busy=value;updateControls();}
 $("deliverySelect").onchange=updateControls;
+$("usageRefresh").onclick=()=>loadAccountUsage();
 function resizePrompt() {
   const prompt=$("prompt"),mobile=mobileLayout.matches;
   prompt.style.height="auto";
@@ -1052,9 +1118,11 @@ $("logout").onclick=async()=>{
     updateControls();
     return;
   }
+  void loadAccountUsage();
   try {await list();await refresh();}catch(e){notice(e.message);}
   // The bridge consumes live IPC patches; browsers poll its bounded projection.
   // No model call or history reload is performed by an ordinary poll.
   const timer=setInterval(()=>{if(!busy)refresh();},1500);
-  window.addEventListener("beforeunload",()=>{clearInterval(timer);releaseMessageImages();});
+  const usageTimer=setInterval(()=>loadAccountUsage(),60000);
+  window.addEventListener("beforeunload",()=>{clearInterval(timer);clearInterval(usageTimer);releaseMessageImages();});
 })();

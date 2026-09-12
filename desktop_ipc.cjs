@@ -47,6 +47,67 @@ function optionalEffort(value) {
   if (!REASONING_EFFORTS.has(effort)) throw Error('Invalid reasoning effort');
   return effort;
 }
+function codexExecutable() {
+  if (process.platform!=='win32') throw Error('Account quota requires the Windows Codex runtime');
+  const arch=process.arch==='arm64' ? 'arm64' : 'x64';
+  const triple=process.arch==='arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc';
+  const executable=path.win32.join(process.env.APPDATA || '', 'npm', 'node_modules', '@openai', 'codex',
+    'node_modules', '@openai', `codex-win32-${arch}`, 'vendor', triple, 'bin', 'codex.exe');
+  if (!fs.existsSync(executable)) throw Error('Windows Codex CLI is not installed; account quota is unavailable');
+  return executable;
+}
+function normalizeRateLimits(payload) {
+  const source=payload?.rateLimitsByLimitId && typeof payload.rateLimitsByLimitId==='object'
+    ? Object.values(payload.rateLimitsByLimitId) : [payload?.rateLimits].filter(Boolean);
+  const seen=new Set(),limits=[];
+  for (const value of source) {
+    if (!value || typeof value!=='object') continue;
+    const id=String(value.limitId || 'codex');if(seen.has(id))continue;seen.add(id);
+    const windows=[];
+    for (const window of [value.primary,value.secondary]) {
+      const usedPercent=Number(window?.usedPercent),windowDurationMins=Number(window?.windowDurationMins);
+      const resetsAt=Number(window?.resetsAt);
+      if (!Number.isFinite(usedPercent) || !Number.isFinite(windowDurationMins) || windowDurationMins<=0) continue;
+      windows.push({usedPercent:Math.max(0,Math.min(100,usedPercent)),windowDurationMins,
+        resetsAt:Number.isFinite(resetsAt) && resetsAt>0 ? resetsAt : null});
+    }
+    if (windows.length) limits.push({id,name:String(value.limitName || (id==='codex' ? 'Codex' : id)),windows});
+  }
+  limits.sort((a,b)=>(a.id==='codex'?-1:b.id==='codex'?1:a.name.localeCompare(b.name)));
+  return {limits};
+}
+function readAccountRateLimits({spawnProcess=spawn,timeout=15000}={}) {
+  return new Promise((resolve,reject)=>{
+    let child,settled=false,lines,timer;
+    const finish=(error,result)=>{
+      if(settled)return;settled=true;clearTimeout(timer);lines?.close();
+      if(child?.stdin?.writable)child.stdin.end();
+      const kill=setTimeout(()=>{if(child && !child.killed)child.kill();},300);kill.unref?.();
+      if(error)reject(error);else resolve(normalizeRateLimits(result));
+    };
+    try {child=spawnProcess(codexExecutable(),['app-server','--stdio'],
+      {windowsHide:true,stdio:['pipe','pipe','ignore']});}
+    catch(error){finish(error);return;}
+    timer=setTimeout(()=>finish(Error('Timed out while reading Codex account quota')),timeout);
+    child.once('error',finish);child.once('close',code=>{
+      if(!settled)finish(Error(`Codex account quota helper exited (${code ?? 'unknown'})`));
+    });
+    lines=readline.createInterface({input:child.stdout,crlfDelay:Infinity});
+    lines.on('line',line=>{
+      let message;try{message=JSON.parse(line);}catch{return;}
+      if(message.id===1) {
+        if(message.error){finish(Error(String(message.error?.message || message.error)));return;}
+        child.stdin.write(JSON.stringify({method:'initialized',params:{}})+'\n');
+        child.stdin.write(JSON.stringify({method:'account/rateLimits/read',id:2})+'\n');
+      } else if(message.id===2) {
+        if(message.error)finish(Error(String(message.error?.message || message.error)));
+        else finish(null,message.result);
+      }
+    });
+    child.stdin.write(JSON.stringify({method:'initialize',id:1,params:{clientInfo:{
+      name:'tunnel_chat',title:'Tunnel Chat',version:'1.0.0'}}})+'\n');
+  });
+}
 function approvalDecisionKind(decision) {
   if (typeof decision==='string') return SIMPLE_APPROVAL_DECISIONS.has(decision) ? decision : null;
   if (!decision || Array.isArray(decision) || Object.getPrototypeOf(decision)!==Object.prototype) return null;
@@ -398,6 +459,7 @@ class DesktopClient extends EventEmitter {
     this.openThread=openThread;this.ownerWaitMs=ownerWaitMs;this.ownerRetryMs=ownerRetryMs;
     this.pending=new Map(); this.tasks=new Map(); this.tracking=new Map();
     this.connecting=null; this.socket=null; this.clientId=null;this.openedThreads=new Map();
+    this.usageCache=null;this.usagePromise=null;
   }
   async connect() {
     if (this.clientId) return;
@@ -554,6 +616,16 @@ class DesktopClient extends EventEmitter {
       if (task?.state) summaries[id]=taskSummary(task.state,task.revision);
     }
     return summaries;
+  }
+  async usage() {
+    const now=Date.now();
+    if(this.usageCache && now-this.usageCache.at<60000)return this.usageCache.value;
+    if(this.usagePromise)return this.usagePromise;
+    this.usagePromise=readAccountRateLimits().then(value=>{
+      const result={...value,fetchedAt:Math.floor(Date.now()/1000)};
+      this.usageCache={at:Date.now(),value:result};return result;
+    }).finally(()=>{this.usagePromise=null;});
+    return this.usagePromise;
   }
   async watch(id, refresh=false, onProgress=()=>{}) {
     if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) throw Error('Invalid task ID');
@@ -762,6 +834,7 @@ async function main() {
         if (line.length>16*1024*1024) throw Error('Bridge command too large');
         command=JSON.parse(line);let result;
         if (command.action==='stage') result=stageAttachment(command.data);
+        else if (command.action==='usage') result=await client.usage();
         else if (command.action==='summaries') result=client.summaries(command.data?.threadIds);
         else if (command.action==='state') result=await client.state(command.threadId,!!command.refresh,
           progress=>process.stdout.write(JSON.stringify({id:command.id,progress})+'\n'),
@@ -776,5 +849,5 @@ async function main() {
   lines.on('close',()=>{chain.finally(()=>{client.close();process.stdout.end();});});
 }
 module.exports={Decoder,frame,applyPatches,turnsOf,projectState,taskSummary,createdThreadIdFromTurn,approvalDecisionKind,
-  validateApprovalDecision,normalizeUserInputResponse,DesktopClient,stageAttachment};
+  validateApprovalDecision,normalizeUserInputResponse,normalizeRateLimits,readAccountRateLimits,DesktopClient,stageAttachment};
 if (require.main===module) main().catch(()=>process.exit(1));

@@ -224,11 +224,14 @@ values remain metadata and are never resolved as Linux paths.
   selector on **Theo task** to inherit the task's current setting. The controls are
   locked only while **Gửi ngay** is selected for an active turn. Codex Desktop
   still enforces model availability for the signed-in account.
-- The task header shows the latest context token count, model context window,
-  remaining tokens, cumulative compaction count and live compaction state from
-  the Desktop snapshot. Codex Desktop does not expose its next automatic compact
-  threshold, so the page labels that boundary as runtime-managed instead of
-  guessing a percentage.
+- The task header and sidebar show the latest context token count, model context
+  window, remaining tokens, cumulative tokens, compaction count and live
+  compaction state from the Desktop snapshot. The sidebar also reads the account
+  quota windows exposed by the installed Windows Codex runtime and refreshes them
+  once per minute; a 5-hour or weekly row appears only when Codex supplies that
+  window. Account identifiers, credits and credentials are not forwarded to the
+  browser. Codex Desktop does not expose its next automatic compact threshold, so
+  the page labels that boundary as runtime-managed instead of guessing a percentage.
 - Stop uses the exact displayed active turn ID. It never kills the shared app.
 - Command/file approvals can be reviewed and answered remotely. The page shows
   only the exact choices advertised by Codex Desktop: one-time approval,

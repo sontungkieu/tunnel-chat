@@ -42,6 +42,23 @@
     <nav aria-label="Điều hướng">
       <a href="/chat/">ChatGPT web</a><a href="/files">Truyền file</a><a href="/queue">Fix queue</a>
     </nav>
+    <section class="sidebar-section usage-section" aria-labelledby="usageHeading">
+      <div class="section-heading">
+        <div id="usageHeading" class="section-label">Sử dụng</div>
+        <button type="button" id="usageRefresh" class="usage-refresh" aria-label="Làm mới quota" title="Làm mới quota">↻</button>
+      </div>
+      <div id="taskUsage" class="usage-card" hidden>
+        <div class="usage-card-heading"><span>Task hiện tại</span><strong id="sideContextPercent"></strong></div>
+        <div id="sideContextMeter" class="usage-meter" role="progressbar" aria-label="Dung lượng context đã dùng"
+          aria-valuemin="0" aria-valuemax="100"><span id="sideContextBar"></span></div>
+        <div id="sideContextTokens" class="usage-detail"></div>
+        <div id="sideCumulativeTokens" class="usage-detail"></div>
+        <div id="sideCompaction" class="usage-detail"></div>
+      </div>
+      <div id="accountUsage" class="quota-list" aria-live="polite">
+        <p id="quotaStatus" class="muted small">Đang tải quota…</p>
+      </div>
+    </section>
     <section class="sidebar-section">
       <div class="section-label">Kết nối task</div>
       <form id="linkForm">

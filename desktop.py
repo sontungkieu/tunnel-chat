@@ -778,7 +778,8 @@ def list_chats(server):
 
 
 def dispatch(server, action, data):
-    if server.load_config().get("desktop_enabled") != "1":
+    config = server.load_config()
+    if config.get("desktop_enabled") != "1":
         raise ValueError("Desktop backend is disabled. Set DESKTOP_ENABLED=1 in .env.local")
     if action == "list":
         return {"chats":list_chats(server),"transport":json.loads(server.client_transport_config())}
@@ -790,6 +791,8 @@ def dispatch(server, action, data):
         return create_status(data)
     if action == "link":
         return link(server,str(data.get("thread") or ""))
+    if action == "usage":
+        return BRIDGE.call(config,"usage",timeout=20)
     chat_id = int(data.get("chat_id") or 0)
     require_chat(server,chat_id)
     if action == "state":

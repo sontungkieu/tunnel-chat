@@ -2,7 +2,8 @@
 const assert=require('node:assert/strict');
 const net=require('node:net');
 const {test}=require('node:test');
-const {Decoder,frame,applyPatches,projectState,taskSummary,createdThreadIdFromTurn,validateApprovalDecision,normalizeUserInputResponse,DesktopClient}=require('../desktop_ipc.cjs');
+const {Decoder,frame,applyPatches,projectState,taskSummary,createdThreadIdFromTurn,validateApprovalDecision,
+  normalizeUserInputResponse,normalizeRateLimits,DesktopClient}=require('../desktop_ipc.cjs');
 const ID='11111111-1111-4111-8111-111111111111';
 const sample=()=>({id:ID,title:'test',cwd:'D:\\work',latestModel:'test-model',latestReasoningEffort:'high',threadRuntimeStatus:{type:'idle'},
   turns:[{turnId:'turn-1',status:'completed',params:{input:[{type:'text',text:'hello'}]},
@@ -168,6 +169,23 @@ test('context usage and compactions are projected without inventing a threshold'
   const active=projectState(s,3).contextUsage;
   assert.equal(active.compactionCount,2);assert.equal(active.compacting,true);
   assert.equal(Object.hasOwn(active,'compactThreshold'),false);
+});
+test('account rate limits expose only named usage windows',()=>{
+  const view=normalizeRateLimits({accountId:'private-account',rateLimitsByLimitId:{
+    codex:{limitId:'codex',primary:{usedPercent:38,windowDurationMins:10080,resetsAt:1789725019},
+      credits:{balance:'secret'}},
+    spark:{limitId:'spark',limitName:'Spark',primary:{usedPercent:4,windowDurationMins:300,resetsAt:1789215071},
+      secondary:{usedPercent:12,windowDurationMins:10080,resetsAt:1789801871}},
+  }});
+  assert.deepEqual(view,{limits:[
+    {id:'codex',name:'Codex',windows:[{usedPercent:38,windowDurationMins:10080,resetsAt:1789725019}]},
+    {id:'spark',name:'Spark',windows:[
+      {usedPercent:4,windowDurationMins:300,resetsAt:1789215071},
+      {usedPercent:12,windowDurationMins:10080,resetsAt:1789801871},
+    ]},
+  ]});
+  assert.equal(JSON.stringify(view).includes('private-account'),false);
+  assert.equal(JSON.stringify(view).includes('secret'),false);
 });
 async function fixture(t) {
   let state=sample(),owner='owner',silent=false,denyInitialize=false,noClientCount=0,connectFailures=0;
