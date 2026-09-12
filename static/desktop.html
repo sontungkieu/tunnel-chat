@@ -77,7 +77,9 @@
           <summary><span class="status-dot" aria-hidden="true"></span><span id="status" aria-live="polite">Chưa kết nối</span><span class="chevron" aria-hidden="true"></span></summary>
           <p id="activityDetail" class="muted small">Kết nối một task để theo dõi hoạt động.</p>
         </details>
-        <button id="reconnect" class="secondary">Kết nối lại</button>
+        <button id="reconnect" class="secondary" aria-label="Kết nối lại">
+          <span class="reconnect-icon" aria-hidden="true">↻</span><span class="reconnect-label">Kết nối lại</span>
+        </button>
       </div>
     </header>
     <div id="notice" role="alert" hidden></div>
@@ -116,7 +118,7 @@
           <button type="button" id="quoteRemove" class="quote-remove" aria-label="Bỏ đoạn trích">×</button>
         </div>
         <label for="prompt" class="sr-only">Tin nhắn</label>
-        <textarea id="prompt" rows="3" placeholder="Gửi tin nhắn tới task… Ctrl+Enter để gửi"></textarea>
+        <textarea id="prompt" rows="1" placeholder="Gửi tin nhắn tới task… Ctrl+Enter để gửi"></textarea>
         <div id="filesLabel" class="muted small"></div>
         <footer>
           <label class="file-button" title="Đính kèm file"><span aria-hidden="true">＋</span><span class="sr-only">Đính kèm file</span><input id="files" type="file" multiple></label>
@@ -125,7 +127,9 @@
             <label><span>Effort</span><select id="effortSelect" aria-label="Reasoning effort cho lượt mới"></select></label>
           </div>
           <span class="composer-spacer"></span>
-          <button type="button" id="stop" class="danger" disabled>Dừng lượt</button>
+          <button type="button" id="stop" class="danger" aria-label="Dừng lượt" disabled>
+            <span class="stop-icon" aria-hidden="true">■</span><span class="stop-label">Dừng lượt</span>
+          </button>
           <label id="deliveryControl" class="delivery-control" title="Chọn xếp thành lượt mới hoặc gửi ngay vào lượt đang chạy" hidden>
             <span class="sr-only">Cách gửi khi agent đang chạy</span>
             <select id="deliverySelect" aria-label="Cách gửi khi agent đang chạy">

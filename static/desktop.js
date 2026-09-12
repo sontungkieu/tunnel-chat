@@ -164,6 +164,8 @@ initializeGenerationControls();
 function updateControls() {
   const unavailable=busy || !token,draft=!!newProjectDraft;
   const running=!!snapshot && snapshot.status==="running",queueing=running && $("deliverySelect").value==="queue";
+  $("composer").classList.toggle("can-stop",!draft && !!snapshot?.activeTurnId);
+  $("composer").classList.toggle("has-delivery",!unavailable && !draft && running);
   const canConfigure=!unavailable && (draft || (!!snapshot && (!running || queueing)));
   $("send").disabled=unavailable || (!snapshot && !draft);
   $("stop").disabled=unavailable || draft || !snapshot?.activeTurnId;
@@ -188,6 +190,14 @@ function updateControls() {
 }
 function setBusy(value) {busy=value;updateControls();}
 $("deliverySelect").onchange=updateControls;
+function resizePrompt() {
+  const prompt=$("prompt"),mobile=mobileLayout.matches;
+  prompt.style.height="auto";
+  const maximum=window.innerHeight*(mobile ? .16 : .32),height=Math.min(prompt.scrollHeight,maximum);
+  prompt.style.height=`${height}px`;prompt.style.overflowY=prompt.scrollHeight>maximum?"auto":"hidden";
+}
+$("prompt").addEventListener("input",resizePrompt);
+mobileLayout.addEventListener?.("change",resizePrompt);
 async function loadTask(payload) {
   setChatLoading(true,{stage:"queued"});
   try {
@@ -1003,13 +1013,14 @@ $("composer").onsubmit=async event=>{
       await refresh();
       if(submitted.queued)notice("Đã xếp tin nhắn thành lượt mới. Tunnel Chat sẽ tự gửi khi task rảnh.");
     }
-    $("prompt").value="";$("files").value="";$("filesLabel").textContent="";clearPendingQuote();
+    $("prompt").value="";resizePrompt();$("files").value="";$("filesLabel").textContent="";clearPendingQuote();
   } catch(e) {
     setChatLoading(false);
     notice(e.message+(submissionStarted?"\nNếu kết quả gửi chưa rõ, hãy kiểm tra hội thoại trước khi gửi lại.":""));
   } finally {if(!pendingMediaRevision)setChatLoading(false);setBusy(false);}
 };
 $("prompt").onkeydown=event=>{if((event.ctrlKey || event.metaKey)&&event.key==="Enter"){event.preventDefault();$("composer").requestSubmit();}};
+resizePrompt();
 $("stop").onclick=async()=>{
   if(!snapshot?.activeTurnId || busy)return;
   setBusy(true);notice();
