@@ -65,6 +65,19 @@ applyTheme(document.documentElement.dataset.theme || "dark");
 $("themeToggle").onclick=()=>applyTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
 $("codexMode").onchange=event=>location.assign(event.target.value);
 const mobileLayout=matchMedia("(max-width: 760px), (max-height: 520px) and (max-width: 960px)");
+function syncVisualViewport() {
+  const viewport=window.visualViewport;
+  const height=Math.max(1,Math.round(viewport?.height || window.innerHeight));
+  const top=Math.max(0,Math.round(viewport?.offsetTop || 0));
+  document.documentElement.style.setProperty("--app-height",`${height}px`);
+  document.documentElement.style.setProperty("--app-top",`${top}px`);
+}
+function handleVisualViewportChange() {
+  syncVisualViewport();resizePrompt();hideSelectionAction();updateScrollLatest();
+}
+syncVisualViewport();
+window.visualViewport?.addEventListener("resize",handleVisualViewportChange,{passive:true});
+window.visualViewport?.addEventListener("scroll",handleVisualViewportChange,{passive:true});
 function setSidebar(open) {
   const wasOpen=document.body.classList.contains("sidebar-open");
   const compact=mobileLayout.matches,sidebar=$("sidebar");
@@ -80,7 +93,7 @@ $("sidebarToggle").onclick=()=>setSidebar(!document.body.classList.contains("sid
 $("sidebarClose").onclick=()=>setSidebar(false);
 $("sidebarBackdrop").onclick=()=>setSidebar(false);
 document.addEventListener("keydown",event=>{if(event.key==="Escape")setSidebar(false);});
-mobileLayout.addEventListener?.("change",event=>{if(!event.matches)setSidebar(false);});
+mobileLayout.addEventListener?.("change",event=>{if(!event.matches)setSidebar(false);handleVisualViewportChange();});
 setSidebar(false);
 if(mobileLayout.matches)$("activityPanel").open=false;
 function operationId() {
@@ -193,7 +206,8 @@ $("deliverySelect").onchange=updateControls;
 function resizePrompt() {
   const prompt=$("prompt"),mobile=mobileLayout.matches;
   prompt.style.height="auto";
-  const maximum=window.innerHeight*(mobile ? .16 : .32),height=Math.min(prompt.scrollHeight,maximum);
+  const viewportHeight=window.visualViewport?.height || window.innerHeight;
+  const maximum=viewportHeight*(mobile ? .16 : .32),height=Math.min(prompt.scrollHeight,maximum);
   prompt.style.height=`${height}px`;prompt.style.overflowY=prompt.scrollHeight>maximum?"auto":"hidden";
 }
 $("prompt").addEventListener("input",resizePrompt);
@@ -336,13 +350,14 @@ function showSelectionAction() {
   if(!candidate){hideSelectionAction();return;}
   selectionCandidate=candidate;
   const button=$("selectionAction");button.hidden=false;
-  const box=button.getBoundingClientRect(),gap=10;
-  let left=candidate.rect.left+(candidate.rect.width-box.width)/2;
-  let top=candidate.rect.top-box.height-gap;
-  if(top<8)top=candidate.rect.bottom+gap;
-  left=Math.max(8,Math.min(left,innerWidth-box.width-8));
-  top=Math.max(8,Math.min(top,innerHeight-box.height-8));
-  button.style.left=`${left}px`;button.style.top=`${top}px`;
+  const box=button.getBoundingClientRect(),visual=window.visualViewport;
+  const viewport={left:visual?.offsetLeft || 0,top:visual?.offsetTop || 0,
+    right:(visual?.offsetLeft || 0)+(visual?.width || innerWidth),
+    bottom:(visual?.offsetTop || 0)+(visual?.height || innerHeight)};
+  const composerTop=$("composer").getBoundingClientRect().top;
+  const position=window.TunnelSelectionQuote?.actionPosition(candidate.rect,box,viewport,
+    {mobile:mobileLayout.matches,bottomLimit:composerTop}) || {left:8,top:8};
+  button.style.left=`${position.left}px`;button.style.top=`${position.top}px`;
 }
 function scheduleSelectionAction() {
   clearTimeout(selectionTimer);selectionTimer=setTimeout(showSelectionAction,100);
@@ -827,7 +842,7 @@ document.addEventListener("keydown",event=>{
   if(event.key==="Escape" && taskMenuContext){event.preventDefault();closeTaskMenu({restoreFocus:true});}
 });
 window.addEventListener("resize",()=>closeTaskMenu());
-window.addEventListener("resize",hideSelectionAction);
+window.addEventListener("resize",handleVisualViewportChange);
 window.addEventListener("resize",updateScrollLatest);
 document.addEventListener("scroll",()=>{closeTaskMenu();hideSelectionAction();},true);
 async function list() {
