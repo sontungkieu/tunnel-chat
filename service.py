@@ -98,6 +98,8 @@ def main() -> None:
                 "CHAT_WEB_PASSWORD_FILE": str(password),
                 "CHAT_WEB_UPSTREAM": config.get("CHAT_WEB_UPSTREAM", ""),
                 "CHAT_WEB_SESSION_SECONDS": config.get("CHAT_WEB_SESSION_SECONDS", "28800"),
+                "CHAT_WEB_SHORT_SESSION_SECONDS": config.get("CHAT_WEB_SHORT_SESSION_SECONDS", "1800"),
+                "CHAT_WEB_TICKET_SECONDS": config.get("CHAT_WEB_TICKET_SECONDS", "1800"),
             })
             gateway = launch("gateway", [node, str(ROOT / "gateway.cjs")], gateway_env)
     except Exception:

@@ -118,16 +118,20 @@ tasks. Keep the Windows app open and the machine awake for desktop access.
 ## ChatGPT web
 
 The browser component lives in [`chatgpt-web/`](chatgpt-web/README.md), with its own
-profile, password, process and HTTP/WebSocket transport. It does not share Codex
-credentials, history or IPC. Run `./bin/chat-web-start` to launch the native Windows Chrome backend, then set
+profile, process and HTTP/WebSocket transport. Run `./bin/chat-web-start` to launch the native Windows Chrome backend, then set
 `CHAT_WEB_UPSTREAM=http://127.0.0.1:3000` and run `./bin/restart-gateway`.
 The browser profile stays on D: and you log in once in that Chrome window on the
 personal machine. No Docker is required. See the component guide for lifecycle,
 input controls and limits. `/codex` continues using its existing app bridge.
 
-`./bin/start` creates `.secrets/chatgpt-web.password` privately if missing. Read it
-on the personal machine and enter it on `/chat/`; this is separate from OpenAI
-and Codex credentials. A browser session expires after eight hours by default.
+When the browser already has a Tunnel Chat Codex token, `/chat/` exchanges it for
+an HttpOnly ChatGPT-viewer session lasting at most 30 minutes. `./bin/url chat`
+creates a one-time link for a new device; the link expires after 30 minutes if
+unused and is invalid immediately after its first exchange. The OpenAI login
+cookie never leaves the dedicated personal-machine Chrome profile.
+
+`./bin/start` also creates `.secrets/chatgpt-web.password` privately as a fallback.
+Password sessions expire after eight hours by default.
 Use `/chat/_auth/session` to log out; password changes require a gateway restart.
 If Google rejects sign-in in the streaming browser, close its Chrome window and
 run `./bin/chat-web-login` for local manual sign-in with streaming paused. After

@@ -22,6 +22,22 @@ elif [ -f run/cloudflared.pid ] && [ -f run/cloudflared.url ] && kill -0 "$(cat 
     base="$(tr -d '\n' < run/cloudflared.url)/"
 fi
 case "$path" in
+    /chat|/chat/)
+        ticket="$(python3 - "http://${HOST:-127.0.0.1}:${PORT:-8787}/chat/_auth/ticket" <<'PY'
+import json
+import os
+import sys
+import urllib.request
+
+request = urllib.request.Request(
+    sys.argv[1], method="POST", headers={"x-chat-token": os.environ["CHAT_ACCESS_TOKEN"]}
+)
+with urllib.request.urlopen(request, timeout=5) as response:
+    payload = json.load(response)
+print(payload["ticket"])
+PY
+)"
+        printf '%schat/#ticket=%s\n' "$base" "$ticket" ;;
     /codex|/codex/|/codex/cli|/desktop|/desktop/|/queue|/files|/files/)
         printf '%s%s#token=%s\n' "${base%/}" "$path" "$CHAT_ACCESS_TOKEN" ;;
     /*)

@@ -7,7 +7,7 @@ it does not stream the host desktop or copy another browser's cookies.
 The tab inside the ChatGPT/Codex app is not attached: that running browser has
 no external DevTools endpoint. Log in once in the dedicated Chrome window on
 the personal machine. The persistent profile is on D:, so the company browser
-only needs this tunnel's separate access password.
+only needs a short-lived Tunnel Chat grant.
 
 ## Start on the existing Windows + WSL installation
 
@@ -23,8 +23,15 @@ Set this in .env.local, then restart only the gateway:
     CHAT_WEB_UPSTREAM=http://127.0.0.1:3000
     ./bin/restart-gateway
 
-Open /chat/ through the HTTPS tunnel and enter the password from
-.secrets/chatgpt-web.password. It is separate from the OpenAI login.
+Open /chat/ through the HTTPS tunnel. If that browser already opened Codex, its
+Tunnel Chat token is exchanged for a separate HttpOnly viewer cookie lasting at
+most 30 minutes. For a new browser, run `./bin/url chat` on the personal machine
+and copy the generated link there. That link expires after 30 minutes if unused,
+works once, and is removed from the address before exchange. The resulting
+viewer cookie also lasts at most 30 minutes.
+
+The password from `.secrets/chatgpt-web.password` remains a fallback and is
+separate from the OpenAI login.
 Use /chat/_auth/session to end tunnel access. Gateway restart also revokes these
 access sessions, while the browser login and the Codex backend remain intact.
 
@@ -58,12 +65,16 @@ See [Google's supported-browser sign-in guidance](https://support.google.com/acc
 - Click the streamed page to use the mouse, keyboard and wheel.
 - The text box below the stream reliably inserts pasted/multiline Vietnamese
   into the selected field. It does not automatically submit the ChatGPT prompt.
-- The page initially adapts to the viewer's available area; use "Vừa cửa sổ"
-  after resizing. Multiple viewers control the same page.
+- The page adapts to the viewer's available area and orientation. "Ưu tiên FPS"
+  sends smaller JPEGs, "Cân bằng" is the default, and "Sắc nét" renders up to
+  the viewer's 2x pixel density. Use "Vừa cửa sổ" to force a refresh. Multiple
+  viewers control the same page.
 - "ChatGPT" returns the dedicated page to chatgpt.com; "Tải lại trang" reloads it.
 - Keep Windows awake and the Chrome window open. Capture pacing targets 60 FPS;
   the actual rate depends on Chrome, the connection and page activity. The FPS
-  counter reports images actually drawn by the viewer. Static pages refresh
+  counter reports images actually drawn by the viewer. CDP JPEG screencasting
+  commonly tops out near 15 FPS; the quality selector trades bytes for detail
+  but cannot turn it into hardware-video streaming. Static pages refresh
   periodically and show "Hình tĩnh" instead of an artificial high frame rate.
 - This release supports text interaction. Audio/video calls, microphone,
   native dialogs, uploads and downloads are not forwarded. Native file pickers
@@ -134,7 +145,11 @@ older viewers after upgrading. This transport works with Quick Tunnel WebSockets
 without depending on SSE, which Quick Tunnels do not support. See
 [Cloudflare tunnel protocol support](https://developers.cloudflare.com/sandbox/api/tunnels/).
 
-Tunnel authentication uses an expiring HttpOnly cookie scoped to /chat/.
+Tunnel authentication uses an expiring HttpOnly cookie scoped to /chat/. A
+Codex token is accepted only by the local gateway to mint that cookie or a
+hashed, in-memory one-time ticket; it is stripped before browser proxying. The
+ticket and its derived session are capped at 30 minutes, and gateway restart
+revokes both.
 Both HTTP streams and WebSockets close on logout/expiry. Codex credentials are
 stripped before proxying browser traffic; browser cookies do not unlock Codex.
 Path separation is not an origin security boundary: use separate hostnames if

@@ -155,6 +155,41 @@ test('auth forms retain same-origin metadata while null and foreign origins stay
   assert.equal((await request(f.base, '/chat/_auth/session', { headers: { cookie } })).status, 401);
 });
 
+test('Codex auth grants a 30-minute ChatGPT session without sharing it with browser upstream', async t => {
+  const f = await fixture(t);
+  const rejected = await request(f.base, '/chat/_auth/codex', {
+    method:'POST', headers:{ origin:f.base, 'x-chat-token':'wrong-codex-token' },
+  });
+  assert.equal(rejected.status, 401);
+  const granted = await request(f.base, '/chat/_auth/codex', {
+    method:'POST', headers:{ origin:f.base, 'x-chat-token':'codex-test-token' },
+  });
+  assert.equal(granted.status, 204);
+  assert.match(granted.headers['set-cookie'][0], /Max-Age=1800/);
+  const cookie = granted.headers['set-cookie'][0].split(';')[0];
+  assert.equal((await request(f.base, '/chat/asset', { headers:{cookie} })).status, 200);
+  assert.equal(f.seen.browser.at(-1)['x-chat-token'], undefined);
+});
+
+test('one-time ChatGPT link expires in 30 minutes and cannot be exchanged twice', async t => {
+  const f = await fixture(t);
+  const minted = await request(f.base, '/chat/_auth/ticket', {
+    method:'POST', headers:{ 'x-chat-token':'codex-test-token' },
+  });
+  assert.equal(minted.status, 201);
+  const payload = JSON.parse(minted.body);
+  assert.equal(typeof payload.ticket, 'string');
+  assert.ok(payload.expiresAt > Date.now() && payload.expiresAt <= Date.now() + 1800000);
+  const exchange = () => request(f.base, '/chat/_auth/exchange', {
+    method:'POST', headers:{ origin:f.base, 'content-type':'application/json' },
+    body:JSON.stringify({ticket:payload.ticket}),
+  });
+  const granted = await exchange();
+  assert.equal(granted.status, 204);
+  assert.match(granted.headers['set-cookie'][0], /Max-Age=1800/);
+  assert.equal((await exchange()).status, 401);
+});
+
 test('login rejects cross-origin, wrong password, oversized input and rate limits failures', async t => {
   const f = await fixture(t);
   assert.equal((await f.login(PASSWORD, { origin: 'https://unrelated.example' })).status, 403);

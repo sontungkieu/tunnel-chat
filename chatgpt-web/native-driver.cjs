@@ -10,7 +10,8 @@ const { CDP, inputCommand } = require('./native-protocol.cjs');
 const { ownedProfile, browserArgs, endpoint } = require('./native-browser.cjs');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-let cdp, viewport = { width: 1280, height: 900 }, closing = false, pendingFrame, lastFrame = 0;
+let cdp, viewport = { width: 1280, height: 900, scale:1 }, closing = false, pendingFrame, lastFrame = 0;
+let streamQuality = 75, screencastStarted = false;
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 for (const key of ['CHAT_WEB_NATIVE_ROOT','CHAT_WEB_BROWSER_BIN','CHAT_WEB_START_URL','CHAT_WEB_CANARY'])
   if (config[key]) process.env[key] = config[key];
@@ -83,8 +84,17 @@ async function connect() {
   async function metrics() {
     try {
       const value = (await cdp.call('Page.getLayoutMetrics')).cssVisualViewport;
-      if (value) viewport = { width: value.clientWidth, height: value.clientHeight };
+      if (value) viewport = { width: value.clientWidth, height: value.clientHeight, scale:viewport.scale || 1 };
     } catch {}
+  }
+  async function startScreencast(quality = streamQuality) {
+    if (screencastStarted) {
+      try { await cdp.call('Page.stopScreencast'); } catch {}
+    }
+    streamQuality = quality;
+    await cdp.call('Page.startScreencast', { format:'jpeg', quality,
+      maxWidth:1920, maxHeight:1600, everyNthFrame:1 });
+    screencastStarted = true;
   }
   cdp.on('Page.frameResized', metrics);
   cdp.on('Page.frameNavigated', metrics);
@@ -99,7 +109,7 @@ async function connect() {
   // A local file picker cannot be forwarded as part of the web page.
   await cdp.call('Page.setInterceptFileChooserDialog', { enabled: true });
   cdp.on('Page.fileChooserOpened', () => emit({ event: 'notice', message: 'Tải tệp qua tunnel chưa được hỗ trợ.' }));
-  await cdp.call('Page.startScreencast', { format: 'jpeg', quality: 75, maxWidth: 1600, maxHeight: 1200, everyNthFrame: 1 });
+  await startScreencast();
   emit({ event: 'status', ready: true, message: 'Đã kết nối Chrome trên máy cá nhân.' });
   let capturing = false;
   setInterval(async () => {
@@ -107,7 +117,7 @@ async function connect() {
     capturing = true;
     try {
       await metrics();
-      const frame = await cdp.call('Page.captureScreenshot', { format:'jpeg', quality:75, captureBeyondViewport:false });
+      const frame = await cdp.call('Page.captureScreenshot', { format:'jpeg', quality:streamQuality, captureBeyondViewport:false });
       queueFrame({ data:frame.data, width:viewport.width, height:viewport.height, capturedAt:Date.now() });
     } catch {}
     finally { capturing = false; }
@@ -121,11 +131,13 @@ async function execute(request) {
     } else if (request.type === 'control' && request.action === 'reload') await cdp.call('Page.reload');
     else if (request.type === 'control' && request.action === 'home') await cdp.call('Page.navigate', { url:'https://chatgpt.com/' });
     else if (request.type === 'control' && request.action === 'viewport') {
-      const { width, height } = request;
-      if (!Number.isInteger(width) || !Number.isInteger(height) || width < 640 || width > 1920 || height < 360 || height > 1400)
+      const { width, height, scale, quality } = request;
+      if (!Number.isInteger(width) || !Number.isInteger(height) || width < 360 || width > 1920 || height < 360 || height > 1400 ||
+          !Number.isFinite(scale) || scale < 1 || scale > 2 || !Number.isInteger(quality) || quality < 55 || quality > 88)
         throw new Error('Invalid viewport');
-      await cdp.call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor:1, mobile:false });
-      viewport = { width, height };
+      await cdp.call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor:scale, mobile:false });
+      viewport = { width, height, scale };
+      if (quality !== streamQuality) await startScreencast(quality);
     } else throw new Error('Unsupported browser action');
     emit({ id:request.id, ok:true });
   } catch { emit({ id:request.id, error:'Browser action failed; check the page before retrying' }); }

@@ -10,6 +10,13 @@ const buffer = new InputBuffer();
 const pending = new Map();
 let socket, latestFrame, painting = false, ready = false, fitted = false, nextId = 0;
 let flushTimer, reconnectTimer, stopped = false, generation = 0, pingStarted = 0, pingId = 0;
+let resizeTimer;
+const quality = document.getElementById('quality');
+const qualityProfiles = {
+  fast:{ scale:1, quality:60 }, balanced:{ scale:1.35, quality:75 }, sharp:{ scale:2, quality:86 },
+};
+const savedQuality = localStorage.getItem('chatWebQuality');
+quality.value = savedQuality && qualityProfiles[savedQuality] ? savedQuality : 'balanced';
 function warn(text = '') { notice.textContent = text; notice.hidden = !text; }
 function transmit(value) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); }
 function failWork() {
@@ -154,13 +161,20 @@ for (const id of ['home','reload']) document.getElementById(id).onclick = async 
 async function fit() {
   if (!ready) return;
   const rect = document.getElementById('stage').getBoundingClientRect();
+  const profile = qualityProfiles[quality.value] || qualityProfiles.balanced;
+  const scale = Math.max(1, Math.min(profile.scale, window.devicePixelRatio || 1));
   try {
     await action('control', { action:'viewport',
-      width:Math.max(640, Math.min(1920, Math.floor(rect.width))),
-      height:Math.max(360, Math.min(1400, Math.floor(rect.height))) });
+      width:Math.max(360, Math.min(1920, Math.floor(rect.width))),
+      height:Math.max(360, Math.min(1400, Math.floor(rect.height))),
+      scale, quality:profile.quality });
   } catch (error) { warn(error.message); }
 }
 document.getElementById('fit').onclick = fit;
+quality.onchange = () => { localStorage.setItem('chatWebQuality', quality.value); fit(); };
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer); resizeTimer = setTimeout(fit, 250);
+});
 window.addEventListener('beforeunload', () => {
   stopped = true; clearTimeout(reconnectTimer); clearInterval(pingTimer); failWork(); socket?.close();
 });

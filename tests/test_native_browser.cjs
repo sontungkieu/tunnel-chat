@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { browserArgs } = require('../chatgpt-web/native-browser.cjs');
 const { inputCommand, CDP } = require('../chatgpt-web/native-protocol.cjs');
+const { validateCommand } = require('../chatgpt-web/native-server.cjs');
 
 test('input whitelist maps scaled coordinates and Unicode without exposing arbitrary CDP', () => {
   const [method, args] = inputCommand({ kind:'mouse', type:'mousePressed', x:.25, y:.5,
@@ -43,4 +44,13 @@ test('manual login uses the same owned profile without automation or an app wind
   assert.ok(manual.every(arg => !/debugging|automation|headless|--app=/.test(arg)));
   assert.ok(stream.includes('--remote-debugging-port=0'));
   assert.ok(stream.includes('--remote-debugging-address=127.0.0.1'));
+});
+
+test('viewport profiles support mobile CSS width and bounded image quality', () => {
+  assert.deepEqual(validateCommand({ type:'control', action:'viewport', width:390, height:760,
+    scale:2, quality:86 }), { type:'control', action:'viewport', width:390, height:760, scale:2, quality:86 });
+  assert.throws(() => validateCommand({ type:'control', action:'viewport', width:359, height:760,
+    scale:1, quality:60 }));
+  assert.throws(() => validateCommand({ type:'control', action:'viewport', width:390, height:760,
+    scale:2.5, quality:90 }));
 });

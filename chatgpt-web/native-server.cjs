@@ -85,10 +85,12 @@ function validateCommand(message) {
   }
   if (message.type === 'control') {
     if (['home','reload'].includes(message.action)) return { type:'control', action:message.action };
-    const { width, height } = message;
-    if (message.action === 'viewport' && Number.isInteger(width) && width >= 640 && width <= 1920 &&
-        Number.isInteger(height) && height >= 360 && height <= 1400)
-      return { type:'control', action:'viewport', width, height };
+    const { width, height, scale, quality } = message;
+    if (message.action === 'viewport' && Number.isInteger(width) && width >= 360 && width <= 1920 &&
+        Number.isInteger(height) && height >= 360 && height <= 1400 &&
+        Number.isFinite(scale) && scale >= 1 && scale <= 2 &&
+        Number.isInteger(quality) && quality >= 55 && quality <= 88)
+      return { type:'control', action:'viewport', width, height, scale, quality };
   }
   throw new Error('Unsupported browser action');
 }
