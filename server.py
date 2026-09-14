@@ -1507,14 +1507,19 @@ def _binary_session(upload_id: int, nonce: str) -> dict[str, object]:
         BINARY_UPLOAD_SESSIONS[upload_id] = session
     return session
 
-def create_binary_file_upload(relative_dir: str, filename: str, mime_type: str, size: int) -> dict[str, object]:
+def create_binary_file_upload(relative_dir: str, filename: str, mime_type: str, size: int,
+                              requested_chunk_size: int | None = None) -> dict[str, object]:
     directory, normalized_dir = file_transfer_path(relative_dir)
     if directory.exists() and not directory.is_dir():
         raise ValueError("Upload destination is not a directory")
     size = int(size)
     if size < 0 or size > binary_file_transfer_max_bytes():
         raise ValueError(f"file too large; limit is {binary_file_transfer_max_bytes() // 1024 // 1024} MB")
-    chunk_size = binary_upload_chunk_bytes()
+    configured_chunk_size = binary_upload_chunk_bytes()
+    if requested_chunk_size is None:
+        chunk_size = configured_chunk_size
+    else:
+        chunk_size = max(MIN_BINARY_UPLOAD_CHUNK_BYTES, min(configured_chunk_size, int(requested_chunk_size)))
     total_chunks = 0 if size == 0 else (size + chunk_size - 1) // chunk_size
     if total_chunks > 2_000_000:
         raise ValueError("file has too many chunks")
@@ -4198,7 +4203,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                     self.send_json(create_binary_file_upload(
                         str(payload.get("directory") or ""), str(payload.get("filename") or "file"),
                         str(payload.get("mime_type") or "application/octet-stream"),
-                        int(payload.get("size") or 0)))
+                        int(payload.get("size") or 0), int(payload.get("chunk_bytes") or 0) or None))
                     return
                 if file_path == "upload/finish-binary":
                     self.send_json({"file": finish_binary_file_upload(
@@ -4520,7 +4525,8 @@ class ChatHandler(BaseHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 self.send_json(create_binary_file_upload(
                     str(payload.get("directory") or ""), str(payload.get("filename") or "file"),
-                    str(payload.get("mime_type") or "application/octet-stream"), int(payload.get("size") or 0)))
+                    str(payload.get("mime_type") or "application/octet-stream"), int(payload.get("size") or 0),
+                    int(payload.get("chunk_bytes") or 0) or None))
             except Exception as exc:
                 self.send_json({"error": redact_secrets(str(exc))}, HTTPStatus.BAD_REQUEST)
             return

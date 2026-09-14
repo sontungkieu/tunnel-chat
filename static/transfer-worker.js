@@ -193,6 +193,7 @@ async function uploadBinaryJob(job) {
     if (!job.uploadId || job.protocol !== "binary-v2") {
       const started = await binaryControlRequest("upload/start-binary", {
         directory: job.directory, filename: job.name, mime_type: job.mimeType, size: job.size,
+        chunk_bytes: chunkBytes,
       });
       job.uploadId = Number(started.upload_id); job.nonce = String(started.nonce);
       job.protocol = "binary-v2"; job.chunkBytes = Number(started.chunk_bytes || chunkBytes);
@@ -273,6 +274,22 @@ async function uploadBinaryJob(job) {
       detail: finished.file?.path || job.name, blob: null, handle: null});
     return true;
   } catch (error) {
+    const intermediateChunkBytes = Math.max(
+      Number(runtime.legacyChunkBytes || 2048) * 2,
+      Math.floor(Number(job.chunkBytes || 0) / 2),
+    );
+    if ([414, 431].includes(Number(error.status))
+        && Number(job.chunkBytes || 0) > Number(runtime.legacyChunkBytes || 2048) * 2) {
+      if (job.uploadId && job.nonce) {
+        await rpc("upload/cancel-binary", {upload_id: job.uploadId, nonce: job.nonce}, 1).catch(() => {});
+      }
+      Object.assign(job, {
+        protocol: null, uploadId: null, nonce: null, chunkBytes: intermediateChunkBytes,
+        totalChunks: null, detail: "Proxy giới hạn URL; đang thử binary với chunk nhỏ hơn",
+      });
+      await putJob(job);
+      return await uploadBinaryJob(job);
+    }
     if (error.status === 404 || isProxyTransportError(error) || /waiting-for-file/.test(error.message)) {
       if (error.status === 404 || isProxyTransportError(error)) {
         if (job.uploadId && job.nonce) {

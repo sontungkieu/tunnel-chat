@@ -200,7 +200,13 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
         }
         assert.equal(options.method, undefined);
         binaryStarts += 1;
-        return Response.json({upload_id: binaryStarts === 1 ? 41 : 42, nonce: "nonce", chunk_bytes: 4, total_chunks: 3});
+        const uploadId = [41, 42, 43][binaryStarts - 1];
+        const requestedChunk = Number(decodePayload(url).chunk_bytes);
+        return Response.json({
+          upload_id: uploadId, nonce: "nonce",
+          chunk_bytes: uploadId === 41 ? 4 : requestedChunk,
+          total_chunks: uploadId === 41 ? 3 : 1,
+        });
       }
       if (url.startsWith("/f/upload/status-binary")) {
         const id = Number(new URL(url, "https://example.test").searchParams.get("upload_id"));
@@ -209,7 +215,7 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
       if (url.startsWith("/f/upload/chunk-binary-get")) {
         assert.equal(options.method, undefined);
         const parsed = new URL(url, "https://example.test");
-        if (Number(parsed.searchParams.get("upload_id")) === 42) {
+        if (Number(parsed.searchParams.get("upload_id")) !== 41) {
           return Response.json({error: "request headers too large"}, {status: 431});
         }
         const encoded = parsed.searchParams.get("body");
@@ -260,7 +266,7 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
     events.get("message")({data, waitUntil: promise => {pending = promise;}});
     await pending;
   }
-  await send({type: "configure", config: {token: "secret", transferProtocol: "binary-v2", chunkBytes: 4, legacyChunkBytes: 2, concurrency: 2, concurrencyMax: 4, retryLimit: 1}});
+  await send({type: "configure", config: {token: "secret", transferProtocol: "binary-v2", chunkBytes: 8, legacyChunkBytes: 2, concurrency: 2, concurrencyMax: 4, retryLimit: 1}});
   const completed = database.records.get(job.id);
   assert.equal(completed.state, "complete", completed.error);
   assert.equal(completed.protocol, "binary-v2");
@@ -285,5 +291,6 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   assert.equal(fallback.protocol, "legacy");
   assert.equal(fallback.result.path, "incoming/blocked.bin");
   assert.equal(legacyChunkCount, 2);
+  assert.equal(binaryStarts, 3);
   assert.ok(requests.some(request => request.url.startsWith("/f/upload/cancel-binary")));
 });

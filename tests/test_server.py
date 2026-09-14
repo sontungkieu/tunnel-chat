@@ -193,6 +193,10 @@ class ServerTestCase(unittest.TestCase):
             started = server.create_binary_file_upload("incoming", "hundred.bin", "application/octet-stream", size)
             self.assertEqual(started["chunk_bytes"], 8 * 1024)
             self.assertEqual(started["total_chunks"], 12_800)
+            smaller = server.create_binary_file_upload(
+                "incoming", "hundred-safe.bin", "application/octet-stream", size, 4 * 1024)
+            self.assertEqual(smaller["chunk_bytes"], 4 * 1024)
+            self.assertEqual(smaller["total_chunks"], 25_600)
             status = server.get_binary_file_upload_status(int(started["upload_id"]), str(started["nonce"]))
             self.assertEqual(status["missing_ranges"], "0-12799")
             self.assertEqual(status["received_bytes"], 0)
