@@ -4177,6 +4177,17 @@ class ChatHandler(BaseHTTPRequestHandler):
                 if file_path == "note/upload/finish":
                     self.send_json({"ok": True, "note": finish_clipboard_note_upload(int(payload.get("upload_id") or 0))})
                     return
+                if file_path == "upload/start-binary":
+                    self.send_json(create_binary_file_upload(
+                        str(payload.get("directory") or ""), str(payload.get("filename") or "file"),
+                        str(payload.get("mime_type") or "application/octet-stream"),
+                        int(payload.get("size") or 0)))
+                    return
+                if file_path == "upload/finish-binary":
+                    self.send_json({"file": finish_binary_file_upload(
+                        int(payload.get("upload_id") or 0), str(payload.get("nonce") or ""),
+                        str(payload.get("sha256") or "server"))})
+                    return
                 if file_path == "upload/start":
                     upload_id = create_file_upload(
                         str(payload.get("directory") or ""), str(payload.get("filename") or "file"),

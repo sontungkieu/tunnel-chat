@@ -178,17 +178,26 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   const events = new Map();
   const chunks = new Map();
   const requests = [];
+  let rejectedStart = false;
   let rejectedPut = false;
+  let rejectedFinish = false;
   const self = {
     clients: {matchAll: async () => [{postMessage: value => {}}], claim: async () => {}},
     skipWaiting: async () => {}, addEventListener: (name, listener) => events.set(name, listener),
   };
   const context = {
-    self, indexedDB: database.api, Blob, URL, URLSearchParams, TextEncoder, crypto: webcrypto,
+    self, indexedDB: database.api, Blob, URL, URLSearchParams, TextEncoder, crypto: webcrypto, btoa,
     setTimeout, clearTimeout, console, Math,
     fetch: async (url, options = {}) => {
       requests.push({url, options});
-      if (url.startsWith("/f/upload/start-binary")) return Response.json({upload_id: 41, nonce: "nonce", chunk_bytes: 4, total_chunks: 3});
+      if (url.startsWith("/f/upload/start-binary")) {
+        if (options.method === "POST") {
+          rejectedStart = true;
+          return Response.json({error: "POST blocked"}, {status: 403});
+        }
+        assert.equal(options.method, undefined);
+        return Response.json({upload_id: 41, nonce: "nonce", chunk_bytes: 4, total_chunks: 3});
+      }
       if (url.startsWith("/f/upload/status-binary")) return Response.json({missing: [1], received_bytes: 6});
       if (url.startsWith("/f/upload/chunk-binary")) {
         assert.equal(options.headers["content-type"], "application/octet-stream");
@@ -202,7 +211,14 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
         chunks.set(index, body);
         return Response.json({ok: true});
       }
-      if (url.startsWith("/f/upload/finish-binary")) return Response.json({file: {path: "incoming/ten.bin"}});
+      if (url.startsWith("/f/upload/finish-binary")) {
+        if (options.method === "POST") {
+          rejectedFinish = true;
+          return Response.json({error: "POST blocked"}, {status: 403});
+        }
+        assert.equal(options.method, undefined);
+        return Response.json({file: {path: "incoming/ten.bin"}});
+      }
       throw new Error(`unexpected request: ${url}`);
     }, Response,
   };
@@ -211,11 +227,13 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   events.get("message")({data: {type: "configure", config: {token: "secret", transferProtocol: "binary-v2", chunkBytes: 4, concurrency: 2, concurrencyMax: 4, retryLimit: 1}}, waitUntil: promise => {pending = promise;}});
   await pending;
   const completed = database.records.get(job.id);
-  assert.equal(completed.state, "complete");
+  assert.equal(completed.state, "complete", completed.error);
   assert.equal(completed.protocol, "binary-v2");
   assert.deepEqual([...chunks.keys()], [1]);
   assert.equal(chunks.get(1).toString(), "efgh");
+  assert.equal(rejectedStart, true);
   assert.equal(rejectedPut, true);
+  assert.equal(rejectedFinish, true);
   assert.ok(requests.some(request => request.url.startsWith("/f/upload/chunk-binary")));
   assert.ok(requests.every(request => request.options.headers["x-chat-token"] === "secret"));
 });

@@ -140,6 +140,18 @@ async function binaryRequest(path, init = {}, attempts = runtime.retryLimit) {
   throw lastError || new Error("request failed");
 }
 
+async function binaryControlRequest(endpoint, payload) {
+  try {
+    return await binaryRequest("/f/" + endpoint, {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify(payload),
+    }, 1);
+  } catch (error) {
+    if (error.status !== 403 && error.status !== 405) throw error;
+    return await rpc(endpoint, payload, 1);
+  }
+}
+
 async function getBinarySource(job) {
   if (job.blob) return job.blob;
   if (!job.handle) throw new Error("waiting-for-file");
@@ -175,10 +187,9 @@ async function uploadBinaryJob(job) {
   const totalChunks = Math.max(1, Math.ceil(job.size / chunkBytes));
   try {
     if (!job.uploadId || job.protocol !== "binary-v2") {
-      const started = await binaryRequest("/f/upload/start-binary", {
-        method: "POST", headers: {"content-type": "application/json"},
-        body: JSON.stringify({directory: job.directory, filename: job.name, mime_type: job.mimeType, size: job.size}),
-      }, 1);
+      const started = await binaryControlRequest("upload/start-binary", {
+        directory: job.directory, filename: job.name, mime_type: job.mimeType, size: job.size,
+      });
       job.uploadId = Number(started.upload_id); job.nonce = String(started.nonce);
       job.protocol = "binary-v2"; job.chunkBytes = Number(started.chunk_bytes || chunkBytes);
       job.totalChunks = Number(started.total_chunks ?? totalChunks);
@@ -241,10 +252,9 @@ async function uploadBinaryJob(job) {
     await progressChain;
     if (firstError) throw firstError;
     await update(job, {state: "finishing", progress: 100, detail: "Đang kiểm tra và hoàn tất trên máy cá nhân"});
-    const finished = await binaryRequest("/f/upload/finish-binary", {
-      method: "POST", headers: {"content-type": "application/json"},
-      body: JSON.stringify({upload_id: job.uploadId, nonce: job.nonce, sha256: "server"}),
-    }, 1);
+    const finished = await binaryControlRequest("upload/finish-binary", {
+      upload_id: job.uploadId, nonce: job.nonce, sha256: "server",
+    });
     await update(job, {state: "complete", progress: 100, receivedBytes: job.size, result: finished.file,
       detail: finished.file?.path || job.name, blob: null, handle: null});
     return true;
