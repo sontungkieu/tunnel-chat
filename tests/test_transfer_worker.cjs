@@ -149,7 +149,7 @@ test("service worker persists file and note jobs then resumes them after authent
   assert.equal(database.records.get(job.id).state, "waiting-auth");
   assert.equal(requests.length, 0);
 
-  await send({type: "configure", config: {token: "test-secret", chunkBytes: 4, concurrency: 2, retryLimit: 1}});
+  await send({type: "configure", config: {token: "test-secret", chunkBytes: 4, legacyChunkBytes: 4, concurrency: 2, retryLimit: 1}});
   const completed = database.records.get(job.id);
   assert.equal(completed.state, "complete");
   assert.equal(completed.progress, 100);
@@ -178,6 +178,8 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   const events = new Map();
   const chunks = new Map();
   const requests = [];
+  let binaryStarts = 0;
+  let legacyChunkCount = 0;
   let rejectedStart = false;
   let rejectedPut = false;
   let rejectedPost = false;
@@ -197,12 +199,19 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
           return Response.json({error: "POST blocked"}, {status: 403});
         }
         assert.equal(options.method, undefined);
-        return Response.json({upload_id: 41, nonce: "nonce", chunk_bytes: 4, total_chunks: 3});
+        binaryStarts += 1;
+        return Response.json({upload_id: binaryStarts === 1 ? 41 : 42, nonce: "nonce", chunk_bytes: 4, total_chunks: 3});
       }
-      if (url.startsWith("/f/upload/status-binary")) return Response.json({missing: [1], received_bytes: 6});
+      if (url.startsWith("/f/upload/status-binary")) {
+        const id = Number(new URL(url, "https://example.test").searchParams.get("upload_id"));
+        return Response.json(id === 41 ? {missing: [1], received_bytes: 6} : {missing: [0], received_bytes: 0});
+      }
       if (url.startsWith("/f/upload/chunk-binary-get")) {
         assert.equal(options.method, undefined);
         const parsed = new URL(url, "https://example.test");
+        if (Number(parsed.searchParams.get("upload_id")) === 42) {
+          return Response.json({error: "request headers too large"}, {status: 431});
+        }
         const encoded = parsed.searchParams.get("body");
         const body = Buffer.from(encoded.replace(/-/g, "+").replace(/_/g, "/"), "base64");
         chunks.set(Number(parsed.searchParams.get("chunk_index")), body);
@@ -226,13 +235,32 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
         assert.equal(options.method, undefined);
         return Response.json({file: {path: "incoming/ten.bin"}});
       }
+      if (url.startsWith("/f/upload/cancel-binary")) return Response.json({ok: true});
+      if (url.startsWith("/f/upload/start")) {
+        const payload = decodePayload(url);
+        assert.equal(payload.total_chunks, 2);
+        return Response.json({upload_id: 52});
+      }
+      if (url.startsWith("/f/upload/status")) {
+        return Response.json({missing: legacyChunkCount ? [] : [0, 1]});
+      }
+      if (url.startsWith("/f/upload/chunk")) {
+        legacyChunkCount += 1;
+        return Response.json({ok: true});
+      }
+      if (url.startsWith("/f/upload/finish")) {
+        return Response.json({file: {path: "incoming/blocked.bin"}});
+      }
       throw new Error(`unexpected request: ${url}`);
     }, Response,
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "static", "transfer-worker.js"), "utf8"), context);
-  let pending;
-  events.get("message")({data: {type: "configure", config: {token: "secret", transferProtocol: "binary-v2", chunkBytes: 4, concurrency: 2, concurrencyMax: 4, retryLimit: 1}}, waitUntil: promise => {pending = promise;}});
-  await pending;
+  async function send(data) {
+    let pending;
+    events.get("message")({data, waitUntil: promise => {pending = promise;}});
+    await pending;
+  }
+  await send({type: "configure", config: {token: "secret", transferProtocol: "binary-v2", chunkBytes: 4, legacyChunkBytes: 2, concurrency: 2, concurrencyMax: 4, retryLimit: 1}});
   const completed = database.records.get(job.id);
   assert.equal(completed.state, "complete", completed.error);
   assert.equal(completed.protocol, "binary-v2");
@@ -244,4 +272,18 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   assert.equal(rejectedFinish, true);
   assert.ok(requests.some(request => request.url.startsWith("/f/upload/chunk-binary")));
   assert.ok(requests.every(request => request.options.headers["x-chat-token"] === "secret"));
+
+  database.records.set("binary-2", clone({
+    id: "binary-2", kind: "file", name: "blocked.bin", mimeType: "application/octet-stream", size: 4,
+    directory: "incoming", blob: new Blob(["wxyz"]), state: "queued", progress: 0,
+    receivedBytes: 0, detail: "queued", error: "", result: null, uploadId: null,
+    protocol: null, createdAt: 2, updatedAt: 2,
+  }));
+  await send({type: "kick"});
+  const fallback = database.records.get("binary-2");
+  assert.equal(fallback.state, "complete", fallback.error);
+  assert.equal(fallback.protocol, "legacy");
+  assert.equal(fallback.result.path, "incoming/blocked.bin");
+  assert.equal(legacyChunkCount, 2);
+  assert.ok(requests.some(request => request.url.startsWith("/f/upload/cancel-binary")));
 });

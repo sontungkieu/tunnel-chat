@@ -210,6 +210,20 @@ class ServerTestCase(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "conflicting duplicate"):
                 server.add_binary_file_upload_chunk(upload_id, nonce, 0, b"nope", "bytes 0-3/4", hashlib.sha256(b"nope").hexdigest())
 
+    def test_binary_file_upload_can_be_cancelled_before_legacy_fallback(self) -> None:
+        transfer_root = Path(self.temp_dir.name) / "cancel-transfer"
+        with mock.patch.object(server, "load_config", return_value={
+            "file_transfer_root": str(transfer_root), "file_transfer_max_bytes": str(128 * 1024 * 1024),
+        }):
+            started = server.create_binary_file_upload("", "blocked.bin", "application/octet-stream", 8192)
+            upload_id, nonce = int(started["upload_id"]), str(started["nonce"])
+            staging = transfer_root / ".incoming" / str(upload_id)
+            self.assertTrue(staging.is_dir())
+            self.assertTrue(server.cancel_binary_file_upload(upload_id, nonce)["ok"])
+            self.assertFalse(staging.exists())
+            with self.assertRaisesRegex(ValueError, "unknown binary upload"):
+                server.get_binary_file_upload_status(upload_id, nonce)
+
     def test_binary_file_upload_handles_empty_file(self) -> None:
         transfer_root = Path(self.temp_dir.name) / "empty-transfer"
         with mock.patch.object(server, "load_config", return_value={

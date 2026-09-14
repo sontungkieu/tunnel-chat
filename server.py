@@ -1580,6 +1580,17 @@ def add_binary_file_upload_chunk(upload_id: int, nonce: str, chunk_index: int,
     return {"ok": True, "chunk_index": meta.chunk_index, "size": len(body)}
 
 
+def cancel_binary_file_upload(upload_id: int, nonce: str) -> dict[str, object]:
+    _binary_session(upload_id, nonce)
+    discard_binary_upload_cache(upload_id)
+    with connect() as conn:
+        conn.execute("DELETE FROM file_binary_chunks WHERE upload_id = ?", (int(upload_id),))
+        conn.execute("DELETE FROM file_binary_uploads WHERE id = ?", (int(upload_id),))
+        conn.commit()
+    shutil.rmtree(binary_staging_root(upload_id), ignore_errors=True)
+    return {"ok": True}
+
+
 def get_binary_file_upload_status(upload_id: int, nonce: str) -> dict[str, object]:
     session = _binary_session(upload_id, nonce)
     total_chunks, size, chunk_size = int(session["total_chunks"]), int(session["size"]), int(session["chunk_size"])
@@ -4142,6 +4153,7 @@ class ChatHandler(BaseHTTPRequestHandler):
                         "transfer_protocol": "binary-v2" if binary_transfer_enabled() else "legacy",
                         "transport": {
                             "chunkBytes": binary_upload_chunk_bytes() if binary_transfer_enabled() else upload_chunk_bytes(),
+                            "legacyChunkBytes": upload_chunk_bytes(),
                             "concurrency": min(upload_concurrency(), upload_concurrency_max()),
                             "concurrencyMax": upload_concurrency_max(),
                             "retryLimit": upload_retry_limit(),
@@ -4192,6 +4204,10 @@ class ChatHandler(BaseHTTPRequestHandler):
                     self.send_json({"file": finish_binary_file_upload(
                         int(payload.get("upload_id") or 0), str(payload.get("nonce") or ""),
                         str(payload.get("sha256") or "server"))})
+                    return
+                if file_path == "upload/cancel-binary":
+                    self.send_json(cancel_binary_file_upload(
+                        int(payload.get("upload_id") or 0), str(payload.get("nonce") or "")))
                     return
                 if file_path == "upload/start":
                     upload_id = create_file_upload(

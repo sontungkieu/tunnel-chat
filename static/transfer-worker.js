@@ -2,7 +2,7 @@
 
 const DB_NAME = "tunnel-chat-transfer-v1";
 const STORE = "jobs";
-let runtime = {token: "", chunkBytes: 2048, concurrency: 3, concurrencyMax: 8, retryLimit: 4, transferProtocol: "legacy"};
+let runtime = {token: "", chunkBytes: 2048, legacyChunkBytes: 2048, concurrency: 3, concurrencyMax: 8, retryLimit: 4, transferProtocol: "legacy"};
 let processing = null;
 
 function openDatabase() {
@@ -140,6 +140,10 @@ async function binaryRequest(path, init = {}, attempts = runtime.retryLimit) {
   throw lastError || new Error("request failed");
 }
 
+function isProxyTransportError(error) {
+  return [403, 405, 413, 414, 431].includes(Number(error?.status));
+}
+
 async function binaryControlRequest(endpoint, payload) {
   try {
     return await binaryRequest("/f/" + endpoint, {
@@ -147,7 +151,7 @@ async function binaryControlRequest(endpoint, payload) {
       body: JSON.stringify(payload),
     }, 1);
   } catch (error) {
-    if (error.status !== 403 && error.status !== 405) throw error;
+    if (!isProxyTransportError(error)) throw error;
     return await rpc(endpoint, payload, 1);
   }
 }
@@ -240,11 +244,11 @@ async function uploadBinaryJob(job) {
           try {
             await binaryRequest(chunkPath, {method: "PUT", ...chunkInit});
           } catch (putError) {
-            if (putError.status !== 403 && putError.status !== 405) throw putError;
+            if (!isProxyTransportError(putError)) throw putError;
             try {
               await binaryRequest(chunkPath, {method: "POST", ...chunkInit});
             } catch (postError) {
-              if (postError.status !== 403 && postError.status !== 405) throw postError;
+              if (!isProxyTransportError(postError)) throw postError;
               const getPath = binaryQuery("upload/chunk-binary-get", {
                 upload_id: job.uploadId, nonce: job.nonce, chunk_index: chunkIndex,
                 content_range: chunkInit.headers["content-range"], sha256: hash,
@@ -269,8 +273,15 @@ async function uploadBinaryJob(job) {
       detail: finished.file?.path || job.name, blob: null, handle: null});
     return true;
   } catch (error) {
-    if (error.status === 404 || error.status === 405 || /waiting-for-file/.test(error.message)) {
-      if (error.status === 404 || error.status === 405) { job.protocol = "legacy"; await putJob(job); return await uploadLegacyJob(job); }
+    if (error.status === 404 || isProxyTransportError(error) || /waiting-for-file/.test(error.message)) {
+      if (error.status === 404 || isProxyTransportError(error)) {
+        if (job.uploadId && job.nonce) {
+          await rpc("upload/cancel-binary", {upload_id: job.uploadId, nonce: job.nonce}, 1).catch(() => {});
+        }
+        Object.assign(job, {protocol: "legacy", uploadId: null, nonce: null, chunkBytes: null, totalChunks: null});
+        await putJob(job);
+        return await uploadLegacyJob(job);
+      }
       await update(job, {state: "waiting-file", detail: "Chọn lại đúng file để tiếp tục", error: ""});
       return false;
     }
@@ -295,8 +306,10 @@ async function uploadLegacyJob(job, resetAttempts = 0) {
   if (!runtime.token) { await update(job, {state: "waiting-auth", detail: "Đang chờ access token"}); return false; }
   try {
     await update(job, {state: "uploading", error: "", detail: "Đang chuẩn bị upload"});
-    const totalChunks = Math.max(1, Math.ceil(job.size / runtime.chunkBytes));
+    const legacyChunkBytes = Number(runtime.legacyChunkBytes || 2048);
+    const totalChunks = Math.max(1, Math.ceil(job.size / legacyChunkBytes));
     const isNote = job.kind === "note";
+    const source = isNote ? job.blob : await getBinarySource(job);
     const uploadPath = isNote ? "note/upload" : "upload";
     if (!job.uploadId) {
       const started = await rpc(`${uploadPath}/start`, isNote ? {
@@ -325,15 +338,15 @@ async function uploadLegacyJob(job, resetAttempts = 0) {
       await runLimited(missing, Math.max(1, runtime.concurrency), async chunkIndex => {
         const latest = await getJob(job.id);
         if (!latest || latest.state === "cancelled") throw new Error("cancelled");
-        const offset = chunkIndex * runtime.chunkBytes;
+        const offset = chunkIndex * legacyChunkBytes;
         await rpc(`${uploadPath}/chunk`, {
           upload_id: job.uploadId, chunk_index: chunkIndex,
-          body: await blobToBase64Url(job.blob.slice(offset, offset + runtime.chunkBytes)),
+          body: await blobToBase64Url(source.slice(offset, offset + legacyChunkBytes)),
         });
         const afterChunk = await getJob(job.id);
         if (!afterChunk || afterChunk.state === "cancelled") throw new Error("cancelled");
         completed += 1;
-        const receivedBytes = Math.min(job.size, completed * runtime.chunkBytes);
+        const receivedBytes = Math.min(job.size, completed * legacyChunkBytes);
         const progressSnapshot = completed;
         progressChain = progressChain.then(() => update(job, {progress: progressSnapshot / totalChunks * 100, receivedBytes,
           detail: `${progressSnapshot}/${totalChunks} phần`}));
