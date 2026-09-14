@@ -214,6 +214,18 @@ class ServerTestCase(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "conflicting duplicate"):
                 server.add_binary_file_upload_chunk(upload_id, nonce, 0, b"nope", "bytes 0-3/4", hashlib.sha256(b"nope").hexdigest())
 
+    def test_legacy_file_upload_can_be_cancelled_before_binary_upgrade(self) -> None:
+        transfer_root = Path(self.temp_dir.name) / "legacy-cancel-transfer"
+        with mock.patch.object(server, "load_config", return_value={
+            "file_transfer_root": str(transfer_root), "file_transfer_max_bytes": str(128 * 1024 * 1024),
+            "upload_chunk_bytes": "2048",
+        }):
+            upload_id = server.create_file_upload("", "stalled.bin", "application/octet-stream", 4, 1)
+            server.add_file_upload_chunk(upload_id, 0, encode_chunk(b"data"))
+            self.assertTrue(server.cancel_file_upload(upload_id)["ok"])
+            with self.assertRaisesRegex(ValueError, "unknown file upload"):
+                server.get_upload_status("file", upload_id)
+
     def test_binary_file_upload_can_be_cancelled_before_legacy_fallback(self) -> None:
         transfer_root = Path(self.temp_dir.name) / "cancel-transfer"
         with mock.patch.object(server, "load_config", return_value={

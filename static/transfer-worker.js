@@ -207,7 +207,8 @@ async function uploadBinaryJob(job) {
     const resumedBytes = completedBytes;
     let laneCount = Math.max(1, Math.min(Number(runtime.concurrency || 4), Number(runtime.concurrencyMax || 8)));
     await update(job, {state: "uploading", error: "", protocol: "binary-v2", progress: job.size ? completedBytes / job.size * 100 : 0,
-      receivedBytes: completedBytes, laneCount, detail: "Đang truyền binary-v2"});
+      receivedBytes: completedBytes, laneCount,
+      detail: "Đang truyền binary-v2 · " + Math.round(Number(job.chunkBytes) / 1024) + " KiB/chunk"});
     let cursor = 0;
     let firstError = null;
     let progressUpdatedAt = 0;
@@ -222,7 +223,7 @@ async function uploadBinaryJob(job) {
       progressChain = progressChain.then(() => update(job, {
         progress: job.size ? bytes / job.size * 100 : 100, receivedBytes: bytes,
         speedBytesPerSecond: speed, etaSeconds: speed ? Math.max(0, (job.size - bytes) / speed) : null,
-        laneCount, detail: `${laneCount} luồng · ${Math.round(bytes / Math.max(1, job.size) * 100)}%`,
+        laneCount, detail: `${laneCount} luồng · ${Math.round(Number(job.chunkBytes) / 1024)} KiB/chunk · ${Math.round(bytes / Math.max(1, job.size) * 100)}%`,
       }));
     }
     async function lane() {
@@ -274,18 +275,19 @@ async function uploadBinaryJob(job) {
       detail: finished.file?.path || job.name, blob: null, handle: null});
     return true;
   } catch (error) {
+    const legacyChunkBytes = Number(runtime.legacyChunkBytes || 2048);
     const intermediateChunkBytes = Math.max(
-      Number(runtime.legacyChunkBytes || 2048) * 2,
-      Math.floor(Number(job.chunkBytes || 0) / 2),
+      legacyChunkBytes * 2,
+      Number(job.chunkBytes || 0) - legacyChunkBytes,
     );
-    if ([414, 431].includes(Number(error.status))
-        && Number(job.chunkBytes || 0) > Number(runtime.legacyChunkBytes || 2048) * 2) {
+    if (isProxyTransportError(error)
+        && Number(job.chunkBytes || 0) > legacyChunkBytes * 2) {
       if (job.uploadId && job.nonce) {
         await rpc("upload/cancel-binary", {upload_id: job.uploadId, nonce: job.nonce}, 1).catch(() => {});
       }
       Object.assign(job, {
         protocol: null, uploadId: null, nonce: null, chunkBytes: intermediateChunkBytes,
-        totalChunks: null, detail: "Proxy giới hạn URL; đang thử binary với chunk nhỏ hơn",
+        totalChunks: null, detail: "Proxy chặn request; đang thử binary " + Math.round(intermediateChunkBytes / 1024) + " KiB/chunk",
       });
       await putJob(job);
       return await uploadBinaryJob(job);
@@ -295,7 +297,7 @@ async function uploadBinaryJob(job) {
         if (job.uploadId && job.nonce) {
           await rpc("upload/cancel-binary", {upload_id: job.uploadId, nonce: job.nonce}, 1).catch(() => {});
         }
-        Object.assign(job, {protocol: "legacy", uploadId: null, nonce: null, chunkBytes: null, totalChunks: null});
+        Object.assign(job, {protocol: "legacy", legacyRequired: true, uploadId: null, nonce: null, chunkBytes: null, totalChunks: null});
         await putJob(job);
         return await uploadLegacyJob(job);
       }
@@ -312,6 +314,15 @@ async function uploadBinaryJob(job) {
 }
 
 async function uploadJob(job) {
+  if (job.kind === "file" && runtime.transferProtocol === "binary-v2"
+      && job.protocol === "legacy" && !job.legacyRequired) {
+    if (job.uploadId) await rpc("upload/cancel", {upload_id: job.uploadId}, 1).catch(() => {});
+    Object.assign(job, {
+      protocol: null, uploadId: null, nonce: null, chunkBytes: null, totalChunks: null,
+      legacyRequired: false, detail: "Đang nâng tác vụ cũ lên binary-v2",
+    });
+    await putJob(job);
+  }
   if (job.kind === "file" && runtime.transferProtocol === "binary-v2" && job.protocol !== "legacy") {
     await update(job, {state: "uploading", error: "", detail: "Đang chuẩn bị upload binary-v2"});
     return await uploadBinaryJob(job);
@@ -366,7 +377,7 @@ async function uploadLegacyJob(job, resetAttempts = 0) {
         const receivedBytes = Math.min(job.size, completed * legacyChunkBytes);
         const progressSnapshot = completed;
         progressChain = progressChain.then(() => update(job, {progress: progressSnapshot / totalChunks * 100, receivedBytes,
-          detail: `${progressSnapshot}/${totalChunks} phần`}));
+          detail: `Legacy · ${Math.round(legacyChunkBytes / 1024)} KiB/chunk · ${progressSnapshot}/${totalChunks} phần`}));
         await progressChain;
       });
       status = await rpc(`${uploadPath}/status`, {upload_id: job.uploadId});

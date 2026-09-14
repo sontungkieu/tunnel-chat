@@ -180,6 +180,7 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   const requests = [];
   let binaryStarts = 0;
   let legacyChunkCount = 0;
+  let legacyCancelled = false;
   let rejectedStart = false;
   let rejectedPut = false;
   let rejectedPost = false;
@@ -200,7 +201,7 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
         }
         assert.equal(options.method, undefined);
         binaryStarts += 1;
-        const uploadId = [41, 42, 43][binaryStarts - 1];
+        const uploadId = [41, 42, 43, 44, 45][binaryStarts - 1];
         const requestedChunk = Number(decodePayload(url).chunk_bytes);
         return Response.json({
           upload_id: uploadId, nonce: "nonce",
@@ -215,8 +216,10 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
       if (url.startsWith("/f/upload/chunk-binary-get")) {
         assert.equal(options.method, undefined);
         const parsed = new URL(url, "https://example.test");
-        if (Number(parsed.searchParams.get("upload_id")) !== 41) {
-          return Response.json({error: "request headers too large"}, {status: 431});
+        const uploadId = Number(parsed.searchParams.get("upload_id"));
+        if ([42, 43, 44].includes(uploadId)) {
+          const status = uploadId === 42 ? 403 : 431;
+          return Response.json({error: status === 403 ? "request blocked" : "request headers too large"}, {status});
         }
         const encoded = parsed.searchParams.get("body");
         const body = Buffer.from(encoded.replace(/-/g, "+").replace(/_/g, "/"), "base64");
@@ -242,6 +245,10 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
         return Response.json({file: {path: "incoming/ten.bin"}});
       }
       if (url.startsWith("/f/upload/cancel-binary")) return Response.json({ok: true});
+      if (url.startsWith("/f/upload/cancel?")) {
+        legacyCancelled = true;
+        return Response.json({ok: true});
+      }
       if (url.startsWith("/f/upload/start")) {
         const payload = decodePayload(url);
         assert.equal(payload.total_chunks, 2);
@@ -289,8 +296,23 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   const fallback = database.records.get("binary-2");
   assert.equal(fallback.state, "complete", fallback.error);
   assert.equal(fallback.protocol, "legacy");
+  assert.equal(fallback.legacyRequired, true);
   assert.equal(fallback.result.path, "incoming/blocked.bin");
   assert.equal(legacyChunkCount, 2);
-  assert.equal(binaryStarts, 3);
+  assert.equal(binaryStarts, 4);
   assert.ok(requests.some(request => request.url.startsWith("/f/upload/cancel-binary")));
+
+  database.records.set("binary-3", clone({
+    id: "binary-3", kind: "file", name: "old-legacy.bin", mimeType: "application/octet-stream", size: 4,
+    directory: "incoming", blob: new Blob(["data"]), state: "uploading", progress: 3.7,
+    receivedBytes: 3686400, detail: "1800/48365 phần", error: "", result: null, uploadId: 77,
+    protocol: "legacy", createdAt: 3, updatedAt: 3,
+  }));
+  await send({type: "kick"});
+  const upgraded = database.records.get("binary-3");
+  assert.equal(upgraded.state, "complete", upgraded.error);
+  assert.equal(upgraded.protocol, "binary-v2");
+  assert.equal(upgraded.legacyRequired, false);
+  assert.equal(binaryStarts, 5);
+  assert.equal(legacyCancelled, true);
 });

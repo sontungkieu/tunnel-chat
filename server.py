@@ -1370,6 +1370,19 @@ def add_file_upload_chunk(upload_id: int, chunk_index: int, body: str) -> None:
         conn.commit()
 
 
+def cancel_file_upload(upload_id: int) -> dict[str, bool]:
+    with connect() as conn:
+        session = conn.execute(
+            "SELECT id FROM file_uploads WHERE id = ?", (upload_id,)
+        ).fetchone()
+        if session is None:
+            raise ValueError(f"unknown file upload #{upload_id}")
+        conn.execute("DELETE FROM file_upload_chunks WHERE upload_id = ?", (upload_id,))
+        conn.execute("DELETE FROM file_uploads WHERE id = ?", (upload_id,))
+        conn.commit()
+    return {"ok": True}
+
+
 def unique_transfer_path(directory: Path, filename: str) -> Path:
     target = directory / safe_filename(filename)
     if not target.exists():
@@ -4231,6 +4244,9 @@ class ChatHandler(BaseHTTPRequestHandler):
                     return
                 if file_path == "upload/status":
                     self.send_json(get_upload_status("file", int(payload.get("upload_id") or 0)))
+                    return
+                if file_path == "upload/cancel":
+                    self.send_json(cancel_file_upload(int(payload.get("upload_id") or 0)))
                     return
                 if file_path == "upload/finish":
                     self.send_json({"ok": True, "file": finish_file_upload(int(payload.get("upload_id") or 0))})
