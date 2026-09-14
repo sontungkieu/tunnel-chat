@@ -139,6 +139,8 @@ class ServerTestCase(unittest.TestCase):
             (transfer_root / "linked-dir").symlink_to(outside_dir, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "Symbolic links"):
                 server.downloadable_transfer_file("linked-dir/secret.txt")
+            with self.assertRaisesRegex(ValueError, "staging"):
+                server.file_transfer_path(".incoming/1/0.part")
 
     def test_binary_file_upload_stages_chunks_and_finishes_atomically(self) -> None:
         transfer_root = Path(self.temp_dir.name) / "binary-transfer"
@@ -162,6 +164,22 @@ class ServerTestCase(unittest.TestCase):
             self.assertEqual((transfer_root / "reports" / "large.bin").read_bytes(), data)
             self.assertEqual(result["path"], "reports/large.bin")
             self.assertFalse((transfer_root / ".incoming" / str(upload_id)).exists())
+
+    def test_binary_profile_accepts_100_mib_without_allocating_it_in_memory(self) -> None:
+        transfer_root = Path(self.temp_dir.name) / "large-transfer"
+        size = 100 * 1024 * 1024
+        with mock.patch.object(server, "load_config", return_value={
+            "file_transfer_root": str(transfer_root),
+            "file_transfer_max_bytes": str(128 * 1024 * 1024),
+            "file_transfer_staging_max_bytes": str(512 * 1024 * 1024),
+            "binary_upload_chunk_bytes": str(8 * 1024),
+        }):
+            started = server.create_binary_file_upload("incoming", "hundred.bin", "application/octet-stream", size)
+            self.assertEqual(started["chunk_bytes"], 8 * 1024)
+            self.assertEqual(started["total_chunks"], 12_800)
+            status = server.get_binary_file_upload_status(int(started["upload_id"]), str(started["nonce"]))
+            self.assertEqual(status["missing_ranges"], "0-12799")
+            self.assertEqual(status["received_bytes"], 0)
 
     def test_binary_file_upload_rejects_conflicting_chunk_and_bad_hash(self) -> None:
         transfer_root = Path(self.temp_dir.name) / "binary-transfer"

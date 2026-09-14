@@ -186,13 +186,29 @@ async function uploadBinaryJob(job) {
     }
     const status = await binaryRequest(binaryQuery("upload/status-binary", {upload_id: job.uploadId, nonce: job.nonce}));
     const missing = Array.isArray(status.missing) ? status.missing.map(Number) : decodeMissingRanges(status.missing_ranges);
-    const startedAt = Number(job.startedAt || Date.now());
+    const startedAt = Date.now();
     let completedBytes = Number(status.received_bytes || 0);
+    const resumedBytes = completedBytes;
     let laneCount = Math.max(1, Math.min(Number(runtime.concurrency || 4), Number(runtime.concurrencyMax || 8)));
     await update(job, {state: "uploading", error: "", protocol: "binary-v2", progress: job.size ? completedBytes / job.size * 100 : 0,
       receivedBytes: completedBytes, laneCount, detail: "Đang truyền binary-v2"});
     let cursor = 0;
     let firstError = null;
+    let progressUpdatedAt = 0;
+    let progressChain = Promise.resolve();
+    function reportProgress(force = false) {
+      const now = Date.now();
+      if (!force && now - progressUpdatedAt < 250) return;
+      progressUpdatedAt = now;
+      const bytes = completedBytes;
+      const elapsed = Math.max(0.001, (now - startedAt) / 1000);
+      const speed = Math.max(0, bytes - resumedBytes) / elapsed;
+      progressChain = progressChain.then(() => update(job, {
+        progress: job.size ? bytes / job.size * 100 : 100, receivedBytes: bytes,
+        speedBytesPerSecond: speed, etaSeconds: speed ? Math.max(0, (job.size - bytes) / speed) : null,
+        laneCount, detail: `${laneCount} luồng · ${Math.round(bytes / Math.max(1, job.size) * 100)}%`,
+      }));
+    }
     async function lane() {
       while (!firstError) {
         const position = cursor++;
@@ -217,15 +233,12 @@ async function uploadBinaryJob(job) {
             await binaryRequest(chunkPath, {method: "POST", ...chunkInit});
           }
           completedBytes += buffer.byteLength;
-          const elapsed = Math.max(0.001, (Date.now() - startedAt) / 1000);
-          const speed = completedBytes / elapsed;
-          await update(job, {progress: job.size ? completedBytes / job.size * 100 : 100, receivedBytes: completedBytes,
-            speedBytesPerSecond: speed, etaSeconds: speed ? Math.max(0, (job.size - completedBytes) / speed) : null,
-            laneCount, detail: `${laneCount} luồng · ${Math.round(completedBytes / Math.max(1, job.size) * 100)}%`});
+          reportProgress(completedBytes >= job.size);
         } catch (error) { firstError = error; }
       }
     }
     await Promise.all(Array.from({length: laneCount}, lane));
+    await progressChain;
     if (firstError) throw firstError;
     await update(job, {state: "finishing", progress: 100, detail: "Đang kiểm tra và hoàn tất trên máy cá nhân"});
     const finished = await binaryRequest("/f/upload/finish-binary", {

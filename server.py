@@ -41,9 +41,9 @@ MAX_BODY_PROBE_BYTES = 32 * 1024 * 1024
 DEFAULT_UPLOAD_CHUNK_BYTES = 2 * 1024
 MIN_UPLOAD_CHUNK_BYTES = 1024
 MAX_UPLOAD_CHUNK_BYTES = 32 * 1024
-DEFAULT_UPLOAD_CONCURRENCY = 3
+DEFAULT_UPLOAD_CONCURRENCY = 4
 MIN_UPLOAD_CONCURRENCY = 1
-MAX_UPLOAD_CONCURRENCY = 6
+MAX_UPLOAD_CONCURRENCY = 8
 DEFAULT_UPLOAD_RETRY_LIMIT = 4
 MIN_UPLOAD_RETRY_LIMIT = 1
 MAX_UPLOAD_RETRY_LIMIT = 8
@@ -54,9 +54,9 @@ DEFAULT_FILE_TRANSFER_ROOT = r"D:\dev\codex\vai"
 DEFAULT_FILE_TRANSFER_MAX_BYTES = 32 * 1024 * 1024
 MIN_FILE_TRANSFER_MAX_BYTES = 1024 * 1024
 MAX_FILE_TRANSFER_MAX_BYTES = 128 * 1024 * 1024
-DEFAULT_BINARY_FILE_TRANSFER_MAX_BYTES = 10 * 1024 * 1024 * 1024
+DEFAULT_BINARY_FILE_TRANSFER_MAX_BYTES = 128 * 1024 * 1024
 MAX_BINARY_FILE_TRANSFER_MAX_BYTES = 10 * 1024 * 1024 * 1024
-DEFAULT_FILE_TRANSFER_STAGING_MAX_BYTES = 20 * 1024 * 1024 * 1024
+DEFAULT_FILE_TRANSFER_STAGING_MAX_BYTES = 512 * 1024 * 1024
 MIN_BINARY_UPLOAD_CHUNK_BYTES = 1024
 MAX_BINARY_UPLOAD_CHUNK_BYTES = 16 * 1024 * 1024
 DEFAULT_BINARY_UPLOAD_CHUNK_BYTES = 8 * 1024
@@ -1271,9 +1271,12 @@ def file_transfer_path(value: str = "", *, must_exist: bool = False) -> tuple[Pa
     resolved = candidate.resolve(strict=False)
     if not resolved.is_relative_to(root):
         raise ValueError("Path must stay inside FILE_TRANSFER_ROOT")
+    relative_path = resolved.relative_to(root)
+    if relative_path.parts and relative_path.parts[0] == ".incoming":
+        raise ValueError("Upload staging is not available through file transfer")
     if must_exist and not resolved.exists():
         raise ValueError("File or directory does not exist")
-    relative = resolved.relative_to(root).as_posix()
+    relative = relative_path.as_posix()
     return resolved, "" if relative == "." else relative
 
 

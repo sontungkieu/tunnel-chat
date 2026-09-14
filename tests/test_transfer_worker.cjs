@@ -178,6 +178,7 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   const events = new Map();
   const chunks = new Map();
   const requests = [];
+  let rejectedPut = false;
   const self = {
     clients: {matchAll: async () => [{postMessage: value => {}}], claim: async () => {}},
     skipWaiting: async () => {}, addEventListener: (name, listener) => events.set(name, listener),
@@ -190,8 +191,12 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
       if (url.startsWith("/f/upload/start-binary")) return Response.json({upload_id: 41, nonce: "nonce", chunk_bytes: 4, total_chunks: 3});
       if (url.startsWith("/f/upload/status-binary")) return Response.json({missing: [1], received_bytes: 6});
       if (url.startsWith("/f/upload/chunk-binary")) {
-        assert.equal(options.method, "PUT");
         assert.equal(options.headers["content-type"], "application/octet-stream");
+        if (options.method === "PUT") {
+          rejectedPut = true;
+          return Response.json({error: "method blocked"}, {status: 405});
+        }
+        assert.equal(options.method, "POST");
         const body = Buffer.from(await new Response(options.body).arrayBuffer());
         const index = Number(new URL(url, "https://example.test").searchParams.get("chunk_index"));
         chunks.set(index, body);
@@ -210,6 +215,7 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   assert.equal(completed.protocol, "binary-v2");
   assert.deepEqual([...chunks.keys()], [1]);
   assert.equal(chunks.get(1).toString(), "efgh");
+  assert.equal(rejectedPut, true);
   assert.ok(requests.some(request => request.url.startsWith("/f/upload/chunk-binary")));
   assert.ok(requests.every(request => request.options.headers["x-chat-token"] === "secret"));
 });
