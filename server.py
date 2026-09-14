@@ -3998,6 +3998,11 @@ class ChatHandler(BaseHTTPRequestHandler):
         message = redact_secrets(fmt % args)
         message = re.sub(r"token=[^\s&\"]+", "token=[redacted]", message)
         message = re.sub(r"p=[^\s&\"]+", "p=[redacted]", message)
+        message = re.sub(
+            r"(GET /f/upload/chunk-binary-get)\?[^\s\"]+",
+            r"\1?[redacted]",
+            message,
+        )
         sys.stderr.write("%s - %s\n" % (self.address_string(), message))
 
     def auth_ok(self) -> bool:
@@ -4213,6 +4218,14 @@ class ChatHandler(BaseHTTPRequestHandler):
                     query = parse_qs(parsed.query)
                     self.send_json(get_binary_file_upload_status(
                         int(query.get("upload_id", ["0"])[0]), query.get("nonce", [""])[0]))
+                    return
+                if file_path == "upload/chunk-binary-get":
+                    query = parse_qs(parsed.query)
+                    body = decode_base64url_chunk(query.get("body", [""])[0])
+                    self.send_json(add_binary_file_upload_chunk(
+                        int(query.get("upload_id", ["0"])[0]), query.get("nonce", [""])[0],
+                        int(query.get("chunk_index", ["0"])[0]), body,
+                        query.get("content_range", [""])[0], query.get("sha256", [""])[0]))
                     return
                 if file_path == "download":
                     target, filename, content_type = downloadable_transfer_file(str(payload.get("path") or ""))

@@ -239,9 +239,19 @@ async function uploadBinaryJob(job) {
           }};
           try {
             await binaryRequest(chunkPath, {method: "PUT", ...chunkInit});
-          } catch (error) {
-            if (error.status !== 403 && error.status !== 405) throw error;
-            await binaryRequest(chunkPath, {method: "POST", ...chunkInit});
+          } catch (putError) {
+            if (putError.status !== 403 && putError.status !== 405) throw putError;
+            try {
+              await binaryRequest(chunkPath, {method: "POST", ...chunkInit});
+            } catch (postError) {
+              if (postError.status !== 403 && postError.status !== 405) throw postError;
+              const getPath = binaryQuery("upload/chunk-binary-get", {
+                upload_id: job.uploadId, nonce: job.nonce, chunk_index: chunkIndex,
+                content_range: chunkInit.headers["content-range"], sha256: hash,
+                body: await blobToBase64Url(new Blob([buffer])),
+              });
+              await binaryRequest(getPath);
+            }
           }
           completedBytes += buffer.byteLength;
           reportProgress(completedBytes >= job.size);

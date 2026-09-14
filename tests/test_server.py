@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -55,6 +56,19 @@ class ServerTestCase(unittest.TestCase):
         self.assertTrue(values["CHAT_ACCESS_TOKEN"])
         self.assertNotIn("2025.2-IT3180E-SE", env_path.read_text(encoding="utf-8"))
         self.assertEqual(env_path.stat().st_mode & 0o777, 0o600)
+
+    def test_binary_get_chunk_access_log_redacts_query_data(self) -> None:
+        handler = object.__new__(server.ChatHandler)
+        stderr = io.StringIO()
+        with mock.patch.object(handler, "address_string", return_value="client"),              mock.patch.object(server.sys, "stderr", stderr):
+            handler.log_message(
+                "%s",
+                '"GET /f/upload/chunk-binary-get?upload_id=1&nonce=secret&body=filedata HTTP/1.1" 200 -',
+            )
+        output = stderr.getvalue()
+        self.assertIn("chunk-binary-get?[redacted]", output)
+        self.assertNotIn("secret", output)
+        self.assertNotIn("filedata", output)
 
     def test_default_upload_chunk_is_safe_for_restrictive_get_proxies(self) -> None:
         with mock.patch.object(server, "ENV_PATH", Path(self.temp_dir.name) / "missing.env"), \

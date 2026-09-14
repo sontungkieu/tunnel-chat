@@ -180,6 +180,7 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   const requests = [];
   let rejectedStart = false;
   let rejectedPut = false;
+  let rejectedPost = false;
   let rejectedFinish = false;
   const self = {
     clients: {matchAll: async () => [{postMessage: value => {}}], claim: async () => {}},
@@ -199,6 +200,14 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
         return Response.json({upload_id: 41, nonce: "nonce", chunk_bytes: 4, total_chunks: 3});
       }
       if (url.startsWith("/f/upload/status-binary")) return Response.json({missing: [1], received_bytes: 6});
+      if (url.startsWith("/f/upload/chunk-binary-get")) {
+        assert.equal(options.method, undefined);
+        const parsed = new URL(url, "https://example.test");
+        const encoded = parsed.searchParams.get("body");
+        const body = Buffer.from(encoded.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+        chunks.set(Number(parsed.searchParams.get("chunk_index")), body);
+        return Response.json({ok: true});
+      }
       if (url.startsWith("/f/upload/chunk-binary")) {
         assert.equal(options.headers["content-type"], "application/octet-stream");
         if (options.method === "PUT") {
@@ -206,10 +215,8 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
           return Response.json({error: "method blocked"}, {status: 405});
         }
         assert.equal(options.method, "POST");
-        const body = Buffer.from(await new Response(options.body).arrayBuffer());
-        const index = Number(new URL(url, "https://example.test").searchParams.get("chunk_index"));
-        chunks.set(index, body);
-        return Response.json({ok: true});
+        rejectedPost = true;
+        return Response.json({error: "POST blocked"}, {status: 403});
       }
       if (url.startsWith("/f/upload/finish-binary")) {
         if (options.method === "POST") {
@@ -233,6 +240,7 @@ test("binary-v2 worker sends raw hashed chunks and resumes only missing ranges",
   assert.equal(chunks.get(1).toString(), "efgh");
   assert.equal(rejectedStart, true);
   assert.equal(rejectedPut, true);
+  assert.equal(rejectedPost, true);
   assert.equal(rejectedFinish, true);
   assert.ok(requests.some(request => request.url.startsWith("/f/upload/chunk-binary")));
   assert.ok(requests.every(request => request.options.headers["x-chat-token"] === "secret"));
