@@ -12,6 +12,7 @@ import re
 import secrets
 import signal
 import shutil
+import socket
 import stat
 import sqlite3
 import subprocess
@@ -78,6 +79,9 @@ UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 CODEX_RUNNERS: dict[int, subprocess.Popen[str]] = {}
 CODEX_RUNNERS_LOCK = threading.Lock()
 CODEX_CANCELLED: set[int] = set()
+BINARY_UPLOAD_CACHE_LOCK = threading.Lock()
+BINARY_UPLOAD_SESSIONS: dict[int, dict[str, object]] = {}
+BINARY_STAGING_HANDLES: dict[int, tuple[Path, int, int, int]] = {}
 EVENT_CONDITION = threading.Condition()
 EVENT_REVISION = 0
 
@@ -681,7 +685,8 @@ def get_upload_status(kind: str, upload_id: int) -> dict[str, object]:
 
 def cleanup_expired_uploads(ttl_seconds: int | None = None) -> dict[str, int]:
     ttl = upload_ttl_seconds() if ttl_seconds is None else max(0, int(ttl_seconds))
-    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ttl)).isoformat(timespec="seconds")
+    cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=ttl)
+    cutoff = cutoff_time.isoformat(timespec="seconds")
     removed: dict[str, int] = {}
     with connect() as conn:
         for kind, (session_table, chunk_table) in UPLOAD_TABLES.items():
@@ -707,7 +712,13 @@ def cleanup_expired_uploads(ttl_seconds: int | None = None) -> dict[str, int]:
         binary_rows = conn.execute(
             "SELECT id FROM file_binary_uploads WHERE updated_at < ?", (cutoff,)
         ).fetchall()
-        binary_ids = [int(row["id"]) for row in binary_rows]
+        binary_ids = []
+        for row in binary_rows:
+            upload_id = int(row["id"])
+            payload = binary_staging_file(upload_id)
+            if payload.exists() and datetime.fromtimestamp(payload.stat().st_mtime, timezone.utc) >= cutoff_time:
+                continue
+            binary_ids.append(upload_id)
         if binary_ids:
             placeholders = ",".join("?" for _ in binary_ids)
             conn.execute(f"DELETE FROM file_binary_chunks WHERE upload_id IN ({placeholders})", binary_ids)
@@ -715,6 +726,7 @@ def cleanup_expired_uploads(ttl_seconds: int | None = None) -> dict[str, int]:
         conn.execute("DELETE FROM file_binary_chunks WHERE upload_id NOT IN (SELECT id FROM file_binary_uploads)")
         conn.commit()
     for upload_id in binary_ids:
+        discard_binary_upload_cache(upload_id)
         shutil.rmtree(file_transfer_root() / ".incoming" / str(upload_id), ignore_errors=True)
     removed["binary"] = len(binary_ids)
     return removed
@@ -1411,21 +1423,89 @@ def finish_file_upload(upload_id: int) -> dict[str, object]:
 
 
 def binary_staging_root(upload_id: int) -> Path:
-    root = file_transfer_root() / ".incoming" / str(int(upload_id))
-    root.parent.mkdir(parents=True, exist_ok=True)
-    return root
+    return file_transfer_root() / ".incoming" / str(int(upload_id))
 
 
-def _binary_session(upload_id: int, nonce: str) -> sqlite3.Row:
+def binary_staging_file(upload_id: int) -> Path:
+    return binary_staging_root(upload_id) / "payload.part"
+
+
+def binary_staging_bitmap(upload_id: int) -> Path:
+    return binary_staging_root(upload_id) / "received.map"
+
+
+def binary_staging_hashes(upload_id: int) -> Path:
+    return binary_staging_root(upload_id) / "chunk-hashes.bin"
+
+
+def pwrite_all(descriptor: int, body: bytes, offset: int) -> None:
+    view = memoryview(body)
+    while view:
+        written = os.pwrite(descriptor, view, offset)
+        if written <= 0:
+            raise ValueError("incomplete staged write")
+        view = view[written:]
+        offset += written
+
+
+def discard_binary_upload_cache(upload_id: int) -> None:
+    with BINARY_UPLOAD_CACHE_LOCK:
+        BINARY_UPLOAD_SESSIONS.pop(int(upload_id), None)
+        handles = BINARY_STAGING_HANDLES.pop(int(upload_id), None)
+    if handles is not None:
+        for descriptor in handles[1:]:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def binary_staging_descriptors(upload_id: int, size: int, total_chunks: int) -> tuple[int, int, int]:
+    upload_id = int(upload_id)
+    with BINARY_UPLOAD_CACHE_LOCK:
+        existing = BINARY_STAGING_HANDLES.get(upload_id)
+        if existing is not None:
+            return existing[1], existing[2], existing[3]
+        payload_path = binary_staging_file(upload_id)
+        bitmap_path = binary_staging_bitmap(upload_id)
+        hashes_path = binary_staging_hashes(upload_id)
+        if (not payload_path.is_file() or payload_path.stat().st_size != size
+                or not bitmap_path.is_file() or bitmap_path.stat().st_size != total_chunks
+                or not hashes_path.is_file() or hashes_path.stat().st_size != total_chunks * 32):
+            raise ValueError("staged upload metadata is missing")
+        payload_descriptor = os.open(payload_path, os.O_WRONLY)
+        try:
+            bitmap_descriptor = os.open(bitmap_path, os.O_RDWR)
+            try:
+                hashes_descriptor = os.open(hashes_path, os.O_RDWR)
+            except Exception:
+                os.close(bitmap_descriptor)
+                raise
+        except Exception:
+            os.close(payload_descriptor)
+            raise
+        BINARY_STAGING_HANDLES[upload_id] = (
+            payload_path, payload_descriptor, bitmap_descriptor, hashes_descriptor)
+        return payload_descriptor, bitmap_descriptor, hashes_descriptor
+
+
+def _binary_session(upload_id: int, nonce: str) -> dict[str, object]:
+    upload_id = int(upload_id)
+    with BINARY_UPLOAD_CACHE_LOCK:
+        cached = BINARY_UPLOAD_SESSIONS.get(upload_id)
+        if cached is not None and secrets.compare_digest(str(cached["nonce"]), str(nonce)):
+            return cached
     with connect() as conn:
-        session = conn.execute(
+        row = conn.execute(
             "SELECT * FROM file_binary_uploads WHERE id = ? AND nonce = ?",
-            (int(upload_id), str(nonce)),
+            (upload_id, str(nonce)),
         ).fetchone()
-    if session is None:
+    if row is None:
         raise ValueError(f"unknown binary upload #{upload_id}")
+    session = dict(row)
+    with BINARY_UPLOAD_CACHE_LOCK:
+        BINARY_UPLOAD_SESSIONS[upload_id] = session
     return session
-
 
 def create_binary_file_upload(relative_dir: str, filename: str, mime_type: str, size: int) -> dict[str, object]:
     directory, normalized_dir = file_transfer_path(relative_dir)
@@ -1435,11 +1515,17 @@ def create_binary_file_upload(relative_dir: str, filename: str, mime_type: str, 
     if size < 0 or size > binary_file_transfer_max_bytes():
         raise ValueError(f"file too large; limit is {binary_file_transfer_max_bytes() // 1024 // 1024} MB")
     chunk_size = binary_upload_chunk_bytes()
-    total_chunks = max(1, (size + chunk_size - 1) // chunk_size)
+    total_chunks = 0 if size == 0 else (size + chunk_size - 1) // chunk_size
     if total_chunks > 2_000_000:
         raise ValueError("file has too many chunks")
     nonce = secrets.token_urlsafe(24)
     with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        reserved = conn.execute(
+            "SELECT COALESCE(SUM(size), 0) AS total FROM file_binary_uploads"
+        ).fetchone()
+        if int(reserved["total"] if reserved else 0) + size > file_transfer_staging_max_bytes():
+            raise ValueError("upload staging disk quota exceeded")
         cur = conn.execute(
             """INSERT INTO file_binary_uploads
                (created_at, updated_at, relative_dir, filename, mime_type, size, chunk_size, total_chunks, nonce)
@@ -1449,15 +1535,24 @@ def create_binary_file_upload(relative_dir: str, filename: str, mime_type: str, 
         )
         upload_id = int(cur.lastrowid)
         conn.commit()
-    binary_staging_root(upload_id).mkdir(parents=True, exist_ok=True)
+    discard_binary_upload_cache(upload_id)
+    staging = binary_staging_root(upload_id)
+    try:
+        staging.mkdir(parents=True, exist_ok=True)
+        with binary_staging_file(upload_id).open("wb") as output:
+            output.truncate(size)
+        with binary_staging_bitmap(upload_id).open("wb") as output:
+            output.truncate(total_chunks)
+        with binary_staging_hashes(upload_id).open("wb") as output:
+            output.truncate(total_chunks * 32)
+    except Exception:
+        with connect() as conn:
+            conn.execute("DELETE FROM file_binary_uploads WHERE id = ?", (upload_id,))
+            conn.commit()
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     return {"upload_id": upload_id, "protocol": "binary-v2", "chunk_bytes": chunk_size,
             "total_chunks": total_chunks, "nonce": nonce}
-
-
-def _binary_staged_bytes() -> int:
-    with connect() as conn:
-        row = conn.execute("SELECT COALESCE(SUM(size), 0) AS total FROM file_binary_chunks").fetchone()
-    return int(row["total"] if row else 0)
 
 
 def add_binary_file_upload_chunk(upload_id: int, nonce: str, chunk_index: int,
@@ -1471,100 +1566,76 @@ def add_binary_file_upload_chunk(upload_id: int, nonce: str, chunk_index: int,
     actual_hash = hashlib.sha256(body).hexdigest()
     if actual_hash != meta.sha256:
         raise ValueError("chunk SHA-256 mismatch")
-    staging = binary_staging_root(upload_id)
-    staging.mkdir(parents=True, exist_ok=True)
-    final_path = transfer_protocol.chunk_path(staging, meta.chunk_index)
-    with connect() as conn:
-        existing = conn.execute(
-            "SELECT size, sha256 FROM file_binary_chunks WHERE upload_id = ? AND chunk_index = ?",
-            (upload_id, meta.chunk_index),
-        ).fetchone()
-        if existing is not None:
-            if int(existing["size"]) == len(body) and str(existing["sha256"]) == meta.sha256 and final_path.is_file():
-                return {"ok": True, "duplicate": True, "chunk_index": meta.chunk_index}
-            raise ValueError("conflicting duplicate chunk")
-        if _binary_staged_bytes() + len(body) > file_transfer_staging_max_bytes():
-            raise ValueError("upload staging disk quota exceeded")
-        temporary = staging / f"{meta.chunk_index}.tmp"
-        try:
-            with temporary.open("wb") as output:
-                output.write(body)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, final_path)
-        except Exception:
-            temporary.unlink(missing_ok=True)
-            raise
-        conn.execute(
-            "INSERT INTO file_binary_chunks(upload_id, chunk_index, size, sha256, stored_at) VALUES (?, ?, ?, ?, ?)",
-            (upload_id, meta.chunk_index, len(body), meta.sha256, now_iso()),
-        )
-        conn.execute("UPDATE file_binary_uploads SET updated_at = ? WHERE id = ?", (now_iso(), upload_id))
-        conn.commit()
+    payload_descriptor, bitmap_descriptor, hashes_descriptor = binary_staging_descriptors(
+        upload_id, int(session["size"]), int(session["total_chunks"]))
+    existing = os.pread(bitmap_descriptor, 1, meta.chunk_index)
+    if existing == b"\x01":
+        previous_hash = os.pread(hashes_descriptor, 32, meta.chunk_index * 32)
+        if previous_hash == bytes.fromhex(meta.sha256):
+            return {"ok": True, "duplicate": True, "chunk_index": meta.chunk_index}
+        raise ValueError("conflicting duplicate chunk")
+    pwrite_all(payload_descriptor, body, meta.start)
+    pwrite_all(hashes_descriptor, bytes.fromhex(meta.sha256), meta.chunk_index * 32)
+    pwrite_all(bitmap_descriptor, b"\x01", meta.chunk_index)
     return {"ok": True, "chunk_index": meta.chunk_index, "size": len(body)}
 
 
 def get_binary_file_upload_status(upload_id: int, nonce: str) -> dict[str, object]:
     session = _binary_session(upload_id, nonce)
-    with connect() as conn:
-        rows = conn.execute(
-            "SELECT chunk_index, size FROM file_binary_chunks WHERE upload_id = ? ORDER BY chunk_index",
-            (upload_id,),
-        ).fetchall()
-    received = {int(row["chunk_index"]): int(row["size"]) for row in rows}
-    missing = [index for index in range(int(session["total_chunks"])) if index not in received]
+    total_chunks, size, chunk_size = int(session["total_chunks"]), int(session["size"]), int(session["chunk_size"])
+    bitmap_path = binary_staging_bitmap(upload_id)
+    if not bitmap_path.is_file() or bitmap_path.stat().st_size != total_chunks:
+        raise ValueError("staged upload metadata is missing")
+    bitmap = bitmap_path.read_bytes()
+    received = [index for index, marker in enumerate(bitmap) if marker == 1]
+    missing = [index for index, marker in enumerate(bitmap) if marker != 1]
+    received_bytes = sum(transfer_protocol.expected_chunk_bounds(size, chunk_size, index)[1] -
+                         transfer_protocol.expected_chunk_bounds(size, chunk_size, index)[0] for index in received)
     return {"upload_id": int(upload_id), "protocol": "binary-v2", "chunk_bytes": int(session["chunk_size"]),
-            "total_chunks": int(session["total_chunks"]), "received_chunks": len(received),
-            "received_bytes": sum(received.values()), "missing_ranges": transfer_protocol.encode_missing_ranges(missing),
+            "total_chunks": total_chunks, "received_chunks": len(received),
+            "received_bytes": received_bytes, "missing_ranges": transfer_protocol.encode_missing_ranges(missing),
             "missing": missing if len(missing) <= 100_000 else None}
 
 
 def finish_binary_file_upload(upload_id: int, nonce: str, file_sha256: str) -> dict[str, object]:
     session = _binary_session(upload_id, nonce)
+    discard_binary_upload_cache(upload_id)
     requested_hash = str(file_sha256).lower()
     if requested_hash != "server" and not re.fullmatch(r"[0-9a-f]{64}", requested_hash):
         raise ValueError("invalid SHA-256")
-    with connect() as conn:
-        rows = conn.execute(
-            "SELECT chunk_index, size, sha256 FROM file_binary_chunks WHERE upload_id = ? ORDER BY chunk_index",
-            (upload_id,),
-        ).fetchall()
     total_chunks = int(session["total_chunks"])
-    if len(rows) != total_chunks or [int(row["chunk_index"]) for row in rows] != list(range(total_chunks)):
+    bitmap_path, hashes_path = binary_staging_bitmap(upload_id), binary_staging_hashes(upload_id)
+    if (not bitmap_path.is_file() or bitmap_path.read_bytes() != b"\x01" * total_chunks
+            or not hashes_path.is_file() or hashes_path.stat().st_size != total_chunks * 32):
         raise ValueError(f"binary upload #{upload_id} is incomplete")
     staging = binary_staging_root(upload_id)
+    payload_path = binary_staging_file(upload_id)
+    if not payload_path.is_file() or payload_path.stat().st_size != int(session["size"]):
+        raise ValueError("staged upload file is missing")
     directory, _ = file_transfer_path(str(session["relative_dir"]))
     directory.mkdir(parents=True, exist_ok=True)
     target = unique_transfer_path(directory, str(session["filename"]))
-    temporary_fd, temporary_name = tempfile.mkstemp(prefix=".tunnel-chat-", dir=directory)
-    os.close(temporary_fd)
-    temporary = Path(temporary_name)
     digest = hashlib.sha256()
     written = 0
-    try:
-        with temporary.open("wb") as output:
-            for row in rows:
-                chunk = transfer_protocol.chunk_path(staging, int(row["chunk_index"]))
-                if not chunk.is_file() or chunk.stat().st_size != int(row["size"]):
-                    raise ValueError("staged chunk is missing")
-                with chunk.open("rb") as source:
-                    while True:
-                        part = source.read(1024 * 1024)
-                        if not part:
-                            break
-                        digest.update(part)
-                        output.write(part)
-                        written += len(part)
-            output.flush()
-            os.fsync(output.fileno())
-        if written != int(session["size"]):
-            raise ValueError("file size mismatch")
-        if requested_hash != "server" and digest.hexdigest() != requested_hash:
-            raise ValueError("file SHA-256 mismatch")
-        os.replace(temporary, target)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
+    with payload_path.open("rb") as source, hashes_path.open("rb") as hashes:
+        for index in range(total_chunks):
+            start, end = transfer_protocol.expected_chunk_bounds(
+                int(session["size"]), int(session["chunk_size"]), index)
+            chunk_size = end - start
+            part = source.read(chunk_size)
+            expected_hash = hashes.read(32)
+            if len(part) != chunk_size or hashlib.sha256(part).digest() != expected_hash:
+                raise ValueError("staged chunk failed integrity check")
+            digest.update(part)
+            written += len(part)
+    if written != int(session["size"]):
+        raise ValueError("file size mismatch")
+    if requested_hash != "server" and digest.hexdigest() != requested_hash:
+        raise ValueError("file SHA-256 mismatch")
+    # The staging area and destination live below the same transfer root, so
+    # publishing the verified payload can be one atomic rename without writing
+    # the full file a second time.
+    os.replace(payload_path, target)
     with connect() as conn:
         conn.execute("DELETE FROM file_binary_chunks WHERE upload_id = ?", (upload_id,))
         conn.execute("DELETE FROM file_binary_uploads WHERE id = ?", (upload_id,))
@@ -3907,6 +3978,13 @@ def codex_page() -> str:
 
 
 class ChatHandler(BaseHTTPRequestHandler):
+    def setup(self) -> None:
+        super().setup()
+        # Binary uploads intentionally use small request bodies so they survive
+        # restrictive proxies. Disable Nagle here to avoid pairing each request
+        # with the delayed-ACK timer on persistent HTTP/1.1 connections.
+        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
     def end_headers(self) -> None:
         self.send_header("referrer-policy", "no-referrer")
         self.send_header("x-content-type-options", "nosniff")

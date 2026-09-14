@@ -181,7 +181,7 @@ async function uploadBinaryJob(job) {
       }, 1);
       job.uploadId = Number(started.upload_id); job.nonce = String(started.nonce);
       job.protocol = "binary-v2"; job.chunkBytes = Number(started.chunk_bytes || chunkBytes);
-      job.totalChunks = Number(started.total_chunks || totalChunks);
+      job.totalChunks = Number(started.total_chunks ?? totalChunks);
       await putJob(job);
     }
     const status = await binaryRequest(binaryQuery("upload/status-binary", {upload_id: job.uploadId, nonce: job.nonce}));

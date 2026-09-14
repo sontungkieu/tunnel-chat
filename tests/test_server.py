@@ -153,13 +153,15 @@ class ServerTestCase(unittest.TestCase):
             upload_id, nonce = int(started["upload_id"]), str(started["nonce"])
             server.add_binary_file_upload_chunk(upload_id, nonce, 1, data[8:], "bytes 8-11/12", hashlib.sha256(data[8:]).hexdigest())
             with server.connect() as conn:
-                self.assertEqual(conn.execute("SELECT COUNT(*) FROM file_binary_chunks").fetchone()[0], 1)
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM file_binary_chunks").fetchone()[0], 0)
                 self.assertEqual(conn.execute("SELECT COUNT(*) FROM file_binary_uploads").fetchone()[0], 1)
                 self.assertEqual(conn.execute("SELECT COUNT(*) FROM file_upload_chunks").fetchone()[0], 0)
             status = server.get_binary_file_upload_status(upload_id, nonce)
             self.assertEqual(status["missing_ranges"], "0")
             server.add_binary_file_upload_chunk(upload_id, nonce, 0, data[:8], "bytes 0-7/12", hashlib.sha256(data[:8]).hexdigest())
             self.assertTrue(server.add_binary_file_upload_chunk(upload_id, nonce, 0, data[:8], "bytes 0-7/12", hashlib.sha256(data[:8]).hexdigest())["duplicate"])
+            staging = transfer_root / ".incoming" / str(upload_id)
+            self.assertEqual(sorted(path.name for path in staging.iterdir()), ["chunk-hashes.bin", "payload.part", "received.map"])
             result = server.finish_binary_file_upload(upload_id, nonce, hashlib.sha256(data).hexdigest())
             self.assertEqual((transfer_root / "reports" / "large.bin").read_bytes(), data)
             self.assertEqual(result["path"], "reports/large.bin")
@@ -193,6 +195,17 @@ class ServerTestCase(unittest.TestCase):
             server.add_binary_file_upload_chunk(upload_id, nonce, 0, b"test", "bytes 0-3/4", digest)
             with self.assertRaisesRegex(ValueError, "conflicting duplicate"):
                 server.add_binary_file_upload_chunk(upload_id, nonce, 0, b"nope", "bytes 0-3/4", hashlib.sha256(b"nope").hexdigest())
+
+    def test_binary_file_upload_handles_empty_file(self) -> None:
+        transfer_root = Path(self.temp_dir.name) / "empty-transfer"
+        with mock.patch.object(server, "load_config", return_value={
+            "file_transfer_root": str(transfer_root), "file_transfer_max_bytes": str(128 * 1024 * 1024),
+        }):
+            started = server.create_binary_file_upload("", "empty.bin", "application/octet-stream", 0)
+            self.assertEqual(started["total_chunks"], 0)
+            result = server.finish_binary_file_upload(int(started["upload_id"]), str(started["nonce"]), hashlib.sha256(b"").hexdigest())
+            self.assertEqual(result["size"], 0)
+            self.assertEqual((transfer_root / "empty.bin").read_bytes(), b"")
 
     def test_clipboard_notes_use_chunked_utf8_preview_and_delete(self) -> None:
         body = ("Dòng clipboard dài có Unicode ✓\n" * 150).strip()

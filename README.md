@@ -152,7 +152,7 @@ computer or phone you can select multiple local files and upload them into that
 directory, browse its folders, or enter a relative/full Windows path inside the
 root and download a file to the current device. Large uploads use resumable
 binary-v2: 8 KiB chunks for the current company proxy, bounded parallel lanes, per-chunk SHA-256,
-disk-backed staging, and atomic publish. The existing JSON/base64 transport
+one preallocated staging payload with compact bitmap/hash metadata, and atomic publish. The existing JSON/base64 transport
 remains as a fallback. Existing files are never overwritten;
 a numeric suffix is added on name collisions. Parent traversal, paths outside the
 configured root, and symbolic links are rejected. Clipboard notes on the same
