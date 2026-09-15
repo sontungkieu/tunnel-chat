@@ -32,48 +32,50 @@
         <span aria-hidden="true">×</span>
       </button>
     </div>
-    <section class="sidebar-section">
-      <label class="section-label" for="codexMode">Chế độ Codex</label>
-      <select id="codexMode" class="mode-select">
-        <option value="/codex" selected>ChatGPT app (Windows)</option>
-        <option value="/codex/cli">Codex CLI (WSL)</option>
-      </select>
-    </section>
-    <nav aria-label="Điều hướng">
-      <a href="/chat/">ChatGPT web</a><a href="/files">Truyền file</a><a href="/queue">Fix queue</a>
-    </nav>
-    <section class="sidebar-section usage-section" aria-labelledby="usageHeading">
-      <div class="section-heading">
-        <div id="usageHeading" class="section-label">Sử dụng</div>
-        <button type="button" id="usageRefresh" class="usage-refresh" aria-label="Làm mới quota" title="Làm mới quota">↻</button>
-      </div>
-      <div id="taskUsage" class="usage-card" hidden>
-        <div class="usage-card-heading"><span>Task hiện tại</span><strong id="sideContextPercent"></strong></div>
-        <div id="sideContextMeter" class="usage-meter" role="progressbar" aria-label="Dung lượng context đã dùng"
-          aria-valuemin="0" aria-valuemax="100"><span id="sideContextBar"></span></div>
-        <div id="sideContextTokens" class="usage-detail"></div>
-        <div id="sideCumulativeTokens" class="usage-detail"></div>
-        <div id="sideCompaction" class="usage-detail"></div>
-      </div>
-      <div id="accountUsage" class="quota-list" aria-live="polite">
-        <p id="quotaStatus" class="muted small">Đang tải quota…</p>
-      </div>
-    </section>
-    <section class="sidebar-section">
-      <div class="section-label">Kết nối task</div>
-      <form id="linkForm">
-        <label for="thread" class="sr-only">Link hoặc ID task</label>
-        <input id="thread" placeholder="codex://threads/…" required autocomplete="off">
-        <button type="button" id="linkButton">Kết nối</button>
-      </form>
-      <p class="muted small">Dán deeplink; máy Windows sẽ tự mở task khi cần.</p>
-    </section>
-    <section class="sidebar-section task-section">
-      <div class="section-heading"><div class="section-label">Task theo project</div>
-        <button type="button" id="newProject" class="project-add">＋ Project</button></div>
-      <div id="taskList" aria-label="Các task đã kết nối"></div>
-    </section>
-    <button id="logout" class="secondary quiet-button">Xóa token trên trình duyệt</button>
+    <div class="sidebar-scroll-body">
+      <section class="sidebar-section">
+        <label class="section-label" for="codexMode">Chế độ Codex</label>
+        <select id="codexMode" class="mode-select">
+          <option value="/codex" selected>ChatGPT app (Windows)</option>
+          <option value="/codex/cli">Codex CLI (WSL)</option>
+        </select>
+      </section>
+      <nav aria-label="Điều hướng">
+        <a href="/chat/">ChatGPT web</a><a href="/files">Truyền file</a><a href="/queue">Fix queue</a>
+      </nav>
+      <section class="sidebar-section usage-section" aria-labelledby="usageHeading">
+        <div class="section-heading">
+          <div id="usageHeading" class="section-label">Sử dụng</div>
+          <button type="button" id="usageRefresh" class="usage-refresh" aria-label="Làm mới quota" title="Làm mới quota">↻</button>
+        </div>
+        <div id="taskUsage" class="usage-card" hidden>
+          <div class="usage-card-heading"><span>Task hiện tại</span><strong id="sideContextPercent"></strong></div>
+          <div id="sideContextMeter" class="usage-meter" role="progressbar" aria-label="Dung lượng context đã dùng"
+            aria-valuemin="0" aria-valuemax="100"><span id="sideContextBar"></span></div>
+          <div id="sideContextTokens" class="usage-detail"></div>
+          <div id="sideCumulativeTokens" class="usage-detail"></div>
+          <div id="sideCompaction" class="usage-detail"></div>
+        </div>
+        <div id="accountUsage" class="quota-list" aria-live="polite">
+          <p id="quotaStatus" class="muted small">Đang tải quota…</p>
+        </div>
+      </section>
+      <section class="sidebar-section">
+        <div class="section-label">Kết nối task</div>
+        <form id="linkForm">
+          <label for="thread" class="sr-only">Link hoặc ID task</label>
+          <input id="thread" placeholder="codex://threads/…" required autocomplete="off">
+          <button type="button" id="linkButton">Kết nối</button>
+        </form>
+        <p class="muted small">Dán deeplink; máy Windows sẽ tự mở task khi cần.</p>
+      </section>
+      <section class="sidebar-section task-section">
+        <div class="section-heading"><div class="section-label">Task theo project</div>
+          <button type="button" id="newProject" class="project-add">＋ Project</button></div>
+        <div id="taskList" aria-label="Các task đã kết nối"></div>
+      </section>
+      <button id="logout" class="secondary quiet-button">Xóa token trên trình duyệt</button>
+    </div>
   </aside>
   <main>
     <header>
