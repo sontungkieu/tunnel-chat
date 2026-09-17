@@ -1,0 +1,14 @@
+{
+  "name": "dsh-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Lop dem proxy-friendly cho DSH web: pass-through WebSocket, transport polling, chunked upload, polyfill browser cu",
+  "main": "dsh-bridge.cjs",
+  "scripts": {
+    "start": "node dsh-bridge.cjs"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "license": "MIT"
+}
