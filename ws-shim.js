@@ -238,6 +238,79 @@
     window.Blob = PatchedBlob;
   })();
 
+  /* ---- RPC lon: cat thanh nhieu POST nho (proxy cong ty gioi han body) ----
+     Proxy cong ty co the tra 413 cho POST qua lon (thuong gap khi dan anh vao
+     o chat: anh duoc base64 ngay trong /api/session/prompt). Shim chan fetch
+     cua trang va day body qua giao thuc blob cua bridge. */
+  var RPC_THRESHOLD = (function () {
+    var q = qs('rpcchunk');
+    if (q === 'reset') { try { localStorage.removeItem('dsh.bridge.rpcsize'); } catch (e) {} return 0; }
+    if (q && /^[0-9]+$/.test(q)) { var v = Number(q); try { localStorage.setItem('dsh.bridge.rpcsize', String(v)); } catch (e) {} return v; }
+    try { return Number(localStorage.getItem('dsh.bridge.rpcsize')) || 0; } catch (e) { return 0; }
+  })();
+  if (!RPC_THRESHOLD || RPC_THRESHOLD < 4096) RPC_THRESHOLD = 65536;
+  if (RPC_THRESHOLD > 64 * 1024 * 1024) RPC_THRESHOLD = 64 * 1024 * 1024;
+
+  function chunkedRpc(path, headers, body, bytes) {
+    return post('/blob/init', { url: path, method: 'POST', headers: headers, size: bytes }).then(function (j) {
+      var bid = j.bid;
+      var blob = new Blob([body]);
+      var seq = 0;
+      var off = 0;
+      function next() {
+        if (off >= bytes) return Promise.resolve();
+        var slice = blob.slice(off, Math.min(off + chunkBytes, bytes));
+        var thisSeq = seq;
+        return fetch(PREFIX + '/blob/chunk?bid=' + encodeURIComponent(bid) + '&seq=' + thisSeq, {
+          method: 'POST',
+          headers: { 'content-type': 'application/octet-stream' },
+          body: slice,
+          credentials: 'same-origin'
+        }).then(function (r) {
+          if (!r.ok) throw new Error('dsh-bridge: rpc chunk ' + thisSeq + ' -> HTTP ' + r.status);
+          off += slice.size;
+          seq += 1;
+          return next();
+        });
+      }
+      return next().then(function () {
+        return fetch(PREFIX + '/blob/finish?bid=' + encodeURIComponent(bid), { method: 'POST', credentials: 'same-origin' });
+      }).then(function (r) {
+        return r.text().then(function (text) {
+          return new Response(text, {
+            status: r.status,
+            statusText: r.statusText,
+            headers: { 'content-type': r.headers.get('content-type') || 'application/json; charset=utf-8' }
+          });
+        });
+      });
+    });
+  }
+
+  (function installRpcChunking() {
+    var nativeFetch = window.fetch;
+    if (typeof nativeFetch !== 'function') return;
+    window.fetch = function (input, init) {
+      try {
+        var raw = (typeof input === 'string') ? input : ((input && input.url) || '');
+        if (raw && raw.indexOf('/api/') !== -1 && init && init.method === 'POST' && typeof init.body === 'string') {
+          var bytes = new Blob([init.body]).size;
+          if (bytes > RPC_THRESHOLD) {
+            var u = new URL(raw, window.location.href);
+            var hdrs = {};
+            var h = init.headers;
+            if (h && typeof h.forEach === 'function') h.forEach(function (v, k) { hdrs[String(k).toLowerCase()] = String(v); });
+            else if (h) { for (var k in h) { if (Object.prototype.hasOwnProperty.call(h, k)) hdrs[String(k).toLowerCase()] = String(h[k]); } }
+            log('RPC ' + bytes + 'B > nguong ' + RPC_THRESHOLD + 'B -> cat nho: ' + u.pathname);
+            return chunkedRpc(u.pathname + u.search, hdrs, init.body, bytes);
+          }
+        }
+      } catch (e) { log('rpc chunk check loi: ' + (e && e.message)); }
+      return nativeFetch.apply(this, arguments);
+    };
+    log('RPC chunking: nguong ' + RPC_THRESHOLD + 'B, manh ' + chunkBytes + 'B (doi bang ?rpcchunk=)');
+  })();
+
   function BridgeSocket(url, protocols) {
     if (!isMuxUrl(url)) return new NativeWS(url, protocols);
     var self = this;

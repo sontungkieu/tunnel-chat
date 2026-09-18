@@ -46,8 +46,15 @@ const CFG = {
 const started = Date.now();
 const stats = { http: 0, wsNative: 0, wsNativeBytes: 0, pollOpen: 0, pollRecv: 0, pollSend: 0, framesToBrowser: 0, framesFromBrowser: 0, blobUploads: 0, blobChunks: 0, blobBytes: 0 };
 
+const LOG_FILE = path.join(__dirname, 'bridge.log');
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
 function log() {
-  console.log('[' + new Date().toISOString() + ']', Array.prototype.slice.call(arguments).join(' '));
+  const line = '[' + new Date().toISOString() + '] ' + Array.prototype.slice.call(arguments).join(' ');
+  try { console.log(line); } catch (e) {}
+  try {
+    if (fs.existsSync(LOG_FILE) && fs.statSync(LOG_FILE).size > LOG_MAX_BYTES) fs.writeFileSync(LOG_FILE, '');
+    fs.appendFileSync(LOG_FILE, line + '\n');
+  } catch (e) {}
 }
 function sendJson(res, status, obj) {
   const body = Buffer.from(JSON.stringify(obj), 'utf8');
@@ -108,6 +115,10 @@ function proxyHttp(req, res) {
   }, function (upRes) {
     stats.http += 1;
     const ctype = String(upRes.headers['content-type'] || '');
+    const bodyBytes = Number(req.headers['content-length'] || 0);
+    if (upRes.statusCode >= 400 || bodyBytes > 100 * 1024) {
+      log('HTTP', req.method, req.url, '->', upRes.statusCode, 'body=' + (bodyBytes || 'chunked') + 'B');
+    }
     if (!ctype.toLowerCase().startsWith('text/html')) {
       res.writeHead(upRes.statusCode, upRes.headers);
       upRes.pipe(res);
