@@ -257,6 +257,9 @@
     this._timer = null;
     this._tx = Promise.resolve();
     this._dead = false;
+    this._fellBack = false;
+    this._pollStarted = false;
+    this._nativeHandlers = null;
     this._closeEmitted = false;
     this._opened = false;
     this._messages = 0;
@@ -305,65 +308,92 @@
 
   /* ---------------- native transport ---------------- */
 
+  BridgeSocket.prototype._detachNative = function () {
+    var ws = this._native;
+    var h = this._nativeHandlers;
+    this._native = null;
+    this._nativeHandlers = null;
+    if (!ws) return ws;
+    if (h) {
+      try {
+        ws.removeEventListener('open', h.open);
+        ws.removeEventListener('message', h.message);
+        ws.removeEventListener('close', h.close);
+        ws.removeEventListener('error', h.error);
+      } catch (e) {}
+    }
+    return ws;
+  };
+
   BridgeSocket.prototype._startNative = function (allowFallback) {
     var self = this;
     var ws;
     try {
       ws = new NativeWS(this.url, this.protocols);
     } catch (e) {
-      return this._fallbackToPoll('constructor threw: ' + e.message);
+      return this._fallbackToPoll('native constructor threw: ' + (e && e.message));
     }
     this._native = ws;
     var probe = setTimeout(function () {
       if (!self._opened && !self._dead) self._fallbackToPoll('native open timeout');
     }, NATIVE_PROBE_MS);
-
-    ws.addEventListener('open', function () {
-      clearTimeout(probe);
-      self._nativeOpenedAt = Date.now();
-      self._transport = 'native';
-      self.readyState = 1;
-      self._emit('open', {});
-    });
-    ws.addEventListener('message', function (ev) {
-      self._emit('message', { data: ev.data });
-    });
-    ws.addEventListener('close', function (ev) {
-      clearTimeout(probe);
-      if (!self._opened) {
-        if (allowFallback) self._fallbackToPoll('closed before open (code ' + ev.code + ')');
-        else { self.readyState = 3; self._emit('close', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean }); }
-        return;
-      }
-      if (ev.code === 1006 || ev.code === 0 || ev.code === undefined) {
-        abnormalCloses += 1;
-        if (self._messages === 0 || abnormalCloses >= 2) {
-          if (mode === 'auto') { writeMode('poll'); log('WebSocket native bi cat bat thuong -> lan sau dung polling'); }
+    var h = {
+      open: function () {
+        clearTimeout(probe);
+        self._nativeOpenedAt = Date.now();
+        self._transport = 'native';
+        self.readyState = 1;
+        self._emit('open', {});
+      },
+      message: function (ev) { self._emit('message', { data: ev.data }); },
+      close: function (ev) {
+        clearTimeout(probe);
+        if (!self._opened) {
+          if (allowFallback) { self._fallbackToPoll('native dong truoc khi mo (code ' + ev.code + ')'); return; }
+          self._detachNative();
+          self.readyState = 3;
+          self._emit('close', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean });
+          return;
         }
+        if (ev.code === 1006 || ev.code === 0 || ev.code === undefined) {
+          abnormalCloses += 1;
+          if (self._messages === 0 || abnormalCloses >= 2) {
+            if (mode === 'auto') { mode = 'poll'; writeMode('poll'); log('WebSocket native bi cat bat thuong -> cac socket sau dung polling'); }
+          }
+        }
+        self._detachNative();
+        self.readyState = 3;
+        self._emit('close', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean });
+      },
+      error: function () {
+        clearTimeout(probe);
+        if (!self._opened && allowFallback) self._fallbackToPoll('native loi truoc khi mo');
+        else self._emit('error', { message: 'native websocket error' });
       }
-      self.readyState = 3;
-      self._emit('close', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean });
-    });
-    ws.addEventListener('error', function () {
-      clearTimeout(probe);
-      if (!self._opened && allowFallback) self._fallbackToPoll('native error before open');
-      else self._emit('error', { message: 'native websocket error' });
-    });
+    };
+    this._nativeHandlers = h;
+    ws.addEventListener('open', h.open);
+    ws.addEventListener('message', h.message);
+    ws.addEventListener('close', h.close);
+    ws.addEventListener('error', h.error);
   };
 
   BridgeSocket.prototype._fallbackToPoll = function (why) {
-    if (this._opened || this._dead) return;
+    if (this._fellBack || this._opened || this._dead) return;
+    this._fellBack = true;
     log('chuyen sang polling:', why);
-    if (mode === 'auto') writeMode('poll');
+    if (mode === 'auto') { mode = 'poll'; writeMode('poll'); }
     this._transport = 'poll';
-    try { if (this._native) { this._native.onopen = this._native.onmessage = this._native.onclose = this._native.onerror = null; this._native.close(); } } catch (e) {}
-    this._native = null;
+    var ws = this._detachNative();
+    try { if (ws) ws.close(); } catch (e) {}
     this._startPoll();
   };
 
   /* ---------------- polling transport ---------------- */
 
   BridgeSocket.prototype._startPoll = function () {
+    if (this._pollStarted) return;
+    this._pollStarted = true;
     var self = this;
     log('mo polling session toi', this.url);
     post('/poll/open', {}).then(function (j) {
@@ -432,7 +462,7 @@
       self.readyState = 3;
       self._emit('close', { code: code || 1000, reason: reason || '', wasClean: true });
     };
-    if (native) { try { native.close(code, reason); } catch (e) {} finish(); return; }
+    if (native) { this._detachNative(); try { native.close(code, reason); } catch (e) {} finish(); return; }
     if (sid) { post('/poll/close', { sid: sid }).then(finish, finish); return; }
     finish();
   };
@@ -441,6 +471,7 @@
     if (this._closeEmitted) return;
     this._dead = true;
     if (this._timer) clearTimeout(this._timer);
+    if (this._sid) { var deadSid = this._sid; this._sid = null; try { post('/poll/close', { sid: deadSid }); } catch (e2) {} }
     this._emit('error', { message: String((e && e.message) || e) });
     this.readyState = 3;
     this._emit('close', { code: 1006, reason: 'bridge transport failure', wasClean: false });
