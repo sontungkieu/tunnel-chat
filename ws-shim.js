@@ -248,18 +248,27 @@
     if (q && /^[0-9]+$/.test(q)) { var v = Number(q); try { localStorage.setItem('dsh.bridge.rpcsize', String(v)); } catch (e) {} return v; }
     try { return Number(localStorage.getItem('dsh.bridge.rpcsize')) || 0; } catch (e) { return 0; }
   })();
-  if (!RPC_THRESHOLD || RPC_THRESHOLD < 4096) RPC_THRESHOLD = 65536;
+  if (!RPC_THRESHOLD || RPC_THRESHOLD < 2048) RPC_THRESHOLD = 8192;
   if (RPC_THRESHOLD > 64 * 1024 * 1024) RPC_THRESHOLD = 64 * 1024 * 1024;
 
+  /* Manh gui RPC: bat dau 16 KB roi TU GIAM khi bi 413 (proxy moi noi khac nhau,
+     va khong biet truoc tran). Giam den 4 KB, ghi nho cho lan sau. */
+  var RPC_CHUNK_KEY = 'dsh.bridge.rpcchunk';
+  var RPC_CHUNK = (function () {
+    try { var v = Number(localStorage.getItem(RPC_CHUNK_KEY)) || 0; if (v >= 4096 && v <= 1048576) return v; } catch (e) {}
+    return 16384;
+  })();
+
   function chunkedRpc(path, headers, body, bytes) {
+    var chunkSize = RPC_CHUNK;
     return post('/blob/init', { url: path, method: 'POST', headers: headers, size: bytes }).then(function (j) {
       var bid = j.bid;
       var blob = new Blob([body]);
       var seq = 0;
       var off = 0;
-      function next() {
+      function sendOne() {
         if (off >= bytes) return Promise.resolve();
-        var slice = blob.slice(off, Math.min(off + chunkBytes, bytes));
+        var slice = blob.slice(off, Math.min(off + chunkSize, bytes));
         var thisSeq = seq;
         return fetch(PREFIX + '/blob/chunk?bid=' + encodeURIComponent(bid) + '&seq=' + thisSeq, {
           method: 'POST',
@@ -267,13 +276,20 @@
           body: slice,
           credentials: 'same-origin'
         }).then(function (r) {
+          if (r.status === 413 && chunkSize > 4096) {
+            chunkSize = Math.max(4096, Math.floor(chunkSize / 2));
+            RPC_CHUNK = chunkSize;
+            try { localStorage.setItem(RPC_CHUNK_KEY, String(chunkSize)); } catch (e) {}
+            log('manh ' + (chunkSize * 2) + 'B bi 413 -> giam con ' + chunkSize + 'B, gui lai');
+            return sendOne();
+          }
           if (!r.ok) throw new Error('dsh-bridge: rpc chunk ' + thisSeq + ' -> HTTP ' + r.status);
           off += slice.size;
           seq += 1;
-          return next();
+          return sendOne();
         });
       }
-      return next().then(function () {
+      return sendOne().then(function () {
         return fetch(PREFIX + '/blob/finish?bid=' + encodeURIComponent(bid), { method: 'POST', credentials: 'same-origin' });
       }).then(function (r) {
         return r.text().then(function (text) {
@@ -308,7 +324,7 @@
       } catch (e) { log('rpc chunk check loi: ' + (e && e.message)); }
       return nativeFetch.apply(this, arguments);
     };
-    log('RPC chunking: nguong ' + RPC_THRESHOLD + 'B, manh ' + chunkBytes + 'B (doi bang ?rpcchunk=)');
+    log('RPC chunking: nguong ' + RPC_THRESHOLD + 'B, manh dau ' + RPC_CHUNK + 'B, tu giam khi 413 (doi bang ?rpcchunk=)');
   })();
 
   function BridgeSocket(url, protocols) {

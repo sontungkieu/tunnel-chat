@@ -1,15 +1,11 @@
 'use strict';
 const https = require('node:https');
-const http = require('node:http');
 const HOST = 'tungks2dsh.ccat.io.vn';
 const IP = '104.21.40.57';
-function get(proto, path, opts) {
+function get(path) {
   return new Promise(function (resolve) {
-    const mod = proto === 'https' ? https : http;
-    const o = proto === 'https'
-      ? { host: HOST, servername: HOST, port: 443, path: path, method: 'GET', headers: { host: HOST }, lookup: function (h, x, cb) { return (x && x.all) ? cb(null, [{ address: IP, family: 4 }]) : cb(null, IP, 4); } }
-      : { host: '127.0.0.1', port: 3090, path: path, method: 'GET', headers: {} };
-    const req = mod.request(o, function (res) {
+    const req = https.request({ host: HOST, servername: HOST, port: 443, path: path, method: 'GET', headers: { host: HOST },
+      lookup: function (h, o, cb) { return (o && o.all) ? cb(null, [{ address: IP, family: 4 }]) : cb(null, IP, 4); } }, function (res) {
       let d = ''; res.setEncoding('utf8'); res.on('data', function (c) { d += c; });
       res.on('end', function () { resolve({ status: res.statusCode, body: d }); });
     });
@@ -18,10 +14,11 @@ function get(proto, path, opts) {
   });
 }
 (async function () {
-  const s = await get('https', '/__dsh_bridge/ws-shim.js');
+  const s = await get('/__dsh_bridge/ws-shim.js');
   console.log('shim live ->', s.status, '|', s.body.length, 'B');
-  console.log('  co RPC chunking     :', s.body.indexOf('installRpcChunking') !== -1);
-  console.log('  co nguong rpcchunk  :', s.body.indexOf('rpcchunk') !== -1);
+  console.log('  nguong 8192        :', s.body.indexOf('RPC_THRESHOLD = 8192') !== -1);
+  console.log('  tu giam khi 413    :', s.body.indexOf('giam con') !== -1);
   try { new Function(s.body); console.log('  syntax OK'); } catch (e) { console.log('  SYNTAX ERROR:', e.message); }
-  await get('http', '/__dsh_bridge/diag/stats');
+  const d = await get('/__dsh_bridge/diag');
+  console.log('diag ->', d.status, '| quet nhieu kich thuoc:', d.body.indexOf('Tran body POST') !== -1);
 })();
