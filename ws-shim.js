@@ -266,6 +266,16 @@
       var blob = new Blob([body]);
       var seq = 0;
       var off = 0;
+      var shrinkTries = 0;
+      function shrink(why) {
+        if (chunkSize <= 4096 || shrinkTries >= 4) return false;
+        shrinkTries += 1;
+        chunkSize = Math.max(4096, Math.floor(chunkSize / 2));
+        RPC_CHUNK = chunkSize;
+        try { localStorage.setItem(RPC_CHUNK_KEY, String(chunkSize)); } catch (e) {}
+        log('manh bi ' + why + ' -> giam con ' + chunkSize + 'B, gui lai');
+        return true;
+      }
       function sendOne() {
         if (off >= bytes) return Promise.resolve();
         var slice = blob.slice(off, Math.min(off + chunkSize, bytes));
@@ -276,17 +286,14 @@
           body: slice,
           credentials: 'same-origin'
         }).then(function (r) {
-          if (r.status === 413 && chunkSize > 4096) {
-            chunkSize = Math.max(4096, Math.floor(chunkSize / 2));
-            RPC_CHUNK = chunkSize;
-            try { localStorage.setItem(RPC_CHUNK_KEY, String(chunkSize)); } catch (e) {}
-            log('manh ' + (chunkSize * 2) + 'B bi 413 -> giam con ' + chunkSize + 'B, gui lai');
-            return sendOne();
-          }
+          if (r.status === 413 && shrink('413')) return sendOne();
           if (!r.ok) throw new Error('dsh-bridge: rpc chunk ' + thisSeq + ' -> HTTP ' + r.status);
           off += slice.size;
           seq += 1;
           return sendOne();
+        }, function (err) {
+          if (shrink('loi mang')) return sendOne();
+          throw err;
         });
       }
       return sendOne().then(function () {
