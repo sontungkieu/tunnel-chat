@@ -308,7 +308,10 @@
     if (typeof nativeFetch !== 'function') return;
     window.fetch = function (input, init) {
       try {
-        var raw = (typeof input === 'string') ? input : ((input && input.url) || '');
+        var raw = '';
+        if (typeof input === 'string') raw = input;
+        else if (input && typeof input.href === 'string') raw = input.href;
+        else if (input && typeof input.url === 'string') raw = input.url;
         if (raw && raw.indexOf('/api/') !== -1 && init && init.method === 'POST' && typeof init.body === 'string') {
           var bytes = new Blob([init.body]).size;
           if (bytes > RPC_THRESHOLD) {
