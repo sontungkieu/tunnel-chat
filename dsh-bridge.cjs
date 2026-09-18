@@ -456,6 +456,43 @@ function loadLoginKey() {
   return key;
 }
 const LOGIN_KEY = loadLoginKey();
+const LOGIN_TICKETS = new Map();
+const TICKET_TTL_MS = 10 * 60 * 1000;
+function mintTicket() {
+  const now = Date.now();
+  for (const [k, v] of LOGIN_TICKETS) { if (v <= now) LOGIN_TICKETS.delete(k); }
+  const t = crypto.randomBytes(9).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, 12);
+  LOGIN_TICKETS.set(t, now + TICKET_TTL_MS);
+  return t;
+}
+function consumeTicket(t) {
+  const exp = LOGIN_TICKETS.get(t);
+  if (exp === void 0) return false;
+  LOGIN_TICKETS.delete(t);
+  return exp > Date.now();
+}
+function ticketGet(req, res, url) {
+  if (LOGIN_KEY === 'off') return sendJson(res, 404, { error: 'login disabled' });
+  // LUU Y: moi request qua Cloudflare deu den tu 127.0.0.1 (cloudflared o local),
+  // nen "loopback" KHONG phai la mot cho dua duoc. Bat buoc phai co ma PIN.
+  const ip = String(req.socket.remoteAddress || '?');
+  if (rateLimited(req)) return loginTooMany(res, ip);
+  const given = String(url.searchParams.get('k') || '').trim().toUpperCase();
+  if (!given || !safeEqual(given, LOGIN_KEY)) {
+    const now = Date.now();
+    const rec = loginAttempts.get(ip) || { count: 0, until: 0 };
+    const next = { count: now < rec.until ? rec.count + 1 : 1, until: now + 60000 };
+    loginAttempts.set(ip, next);
+    log('TICKET', ip, 'sai ma PIN khi tao ticket (' + next.count + ' lan)');
+    return sendJson(res, 403, { error: 'sai ma PIN' });
+  }
+  loginAttempts.delete(ip);
+  const host = String(url.searchParams.get('host') || req.headers.host || '');
+  const proto = String(req.headers['x-forwarded-proto'] || '').indexOf('https') !== -1 ? 'https' : 'http';
+  const t = mintTicket();
+  log('TICKET tao moi cho host ' + host + ', het han sau ' + (TICKET_TTL_MS / 60000) + ' phut');
+  sendJson(res, 200, { ticket: t, url: proto + '://' + host + CFG.prefix + '/login?t=' + t, ttlSeconds: TICKET_TTL_MS / 1000, oneTime: true });
+}
 
 function dshSigningSecret() {
   try {
@@ -509,10 +546,56 @@ function loginPage(message) {
     + '<button type="submit">\u0110\u0103ng nh\u1eadp</button></form>'
     + '<p class="muted">M\u00e3 PIN n\u1eb1m \u1edf <code>D:\\dev\\dsh\\bridge\\.login-key</code>. '
     + 'Sau khi \u0111\u0103ng nh\u1eadp m\u1ed9t l\u1ea7n, browser nh\u1edb 30 ng\u00e0y.</p>'
+    + '<p class="muted">Ho\u1eb7c d\u00f9ng link m\u1ed9t l\u1ea7n: <code>' + CFG.prefix + '/login?t=&lt;ticket&gt;</code>, t\u1ea1o b\u1eb1ng <code>' + CFG.prefix + '/ticket</code> t\u1eeb m\u00e1y ch\u1ee7.</p>'
     + '</body></html>';
 }
-function loginGet(req, res) {
+function loginFail(res, ip, why) {
+  const now = Date.now();
+  const rec = loginAttempts.get(ip) || { count: 0, until: 0 };
+  const next = { count: now < rec.until ? rec.count + 1 : 1, until: now + 60000 };
+  loginAttempts.set(ip, next);
+  log('LOGIN', ip, why + ' (' + next.count + ' lan sai)');
+  const body = Buffer.from(loginPage('M\u00e3 PIN kh\u00f4ng \u0111\u00fang. Th\u1eed l\u1ea1i.'), 'utf8');
+  res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': body.length });
+  res.end(body);
+}
+function loginTooMany(res, ip) {
+  log('LOGIN', ip, 'bi chan tam thoi (qua nhieu lan sai)');
+  sendJson(res, 429, { error: 'too many attempts' });
+}
+function rateLimited(req) {
+  const ip = String(req.socket.remoteAddress || '?');
+  const rec = loginAttempts.get(ip) || { count: 0, until: 0 };
+  return Date.now() < rec.until && rec.count >= 5;
+}
+function grantLogin(req, res, ip, why) {
+  const authority = String(req.headers.host || '');
+  const cookie = mintDshCookie(authority);
+  if (!cookie) {
+    log('LOGIN', ip, 'khong doc duoc secret ky cookie cua DSH');
+    return sendJson(res, 500, { error: 'khong doc duoc secret cua DSH' });
+  }
+  loginAttempts.delete(ip);
+  const secure = String(req.headers['x-forwarded-proto'] || '').indexOf('https') !== -1;
+  const setCookie = cookie.name + '=' + cookie.value + '; Path=/; Max-Age=' + cookie.maxAge + (secure ? '; Secure' : '') + '; SameSite=Lax';
+  log('LOGIN', ip, 'thanh cong (' + why + '), cap cookie cho ' + authority);
+  res.writeHead(303, { location: '/', 'set-cookie': setCookie, 'cache-control': 'no-store', 'content-length': 0 });
+  res.end();
+}
+function loginGet(req, res, url) {
   if (LOGIN_KEY === 'off') return sendJson(res, 404, { error: 'login disabled' });
+  const ip = String(req.socket.remoteAddress || '?');
+  const ticket = String(url.searchParams.get('t') || '');
+  const key = String(url.searchParams.get('k') || '').trim().toUpperCase();
+  if (ticket) {
+    if (consumeTicket(ticket)) return grantLogin(req, res, ip, 'link ticket mot lan');
+    return loginFail(res, ip, 'ticket sai hoac da dung');
+  }
+  if (key) {
+    if (rateLimited(req)) return loginTooMany(res, ip);
+    if (safeEqual(key, LOGIN_KEY)) return grantLogin(req, res, ip, 'link co key');
+    return loginFail(res, ip, 'sai key tren link');
+  }
   const body = Buffer.from(loginPage(''), 'utf8');
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': body.length });
   res.end(body);
@@ -522,7 +605,7 @@ function loginPost(req, res) {
   const ip = String(req.socket.remoteAddress || '?');
   const now = Date.now();
   const rec = loginAttempts.get(ip) || { count: 0, until: 0 };
-  if (now < rec.until && rec.count >= 5) {
+  if (rateLimited(req)) {
     log('LOGIN', ip, 'bi chan tam thoi (qua nhieu lan sai)');
     return sendJson(res, 429, { error: 'too many attempts' });
   }
@@ -538,18 +621,7 @@ function loginPost(req, res) {
       res.end(body);
       return;
     }
-    loginAttempts.delete(ip);
-    const authority = String(req.headers.host || '');
-    const cookie = mintDshCookie(authority);
-    if (!cookie) {
-      log('LOGIN', ip, 'khong doc duoc secret ky cookie cua DSH');
-      return sendJson(res, 500, { error: 'khong doc duoc secret cua DSH' });
-    }
-    const secure = String(req.headers['x-forwarded-proto'] || '').indexOf('https') !== -1;
-    const setCookie = cookie.name + '=' + cookie.value + '; Path=/; Max-Age=' + cookie.maxAge + (secure ? '; Secure' : '') + '; SameSite=Lax';
-    log('LOGIN', ip, 'thanh cong, cap cookie cho ' + authority);
-    res.writeHead(303, { location: '/', 'set-cookie': setCookie, 'cache-control': 'no-store', 'content-length': 0 });
-    res.end();
+    grantLogin(req, res, ip, 'form PIN');
   }).catch(function (e) { sendJson(res, 400, { error: e.message }); });
 }
 
@@ -710,8 +782,9 @@ const server = http.createServer(function (req, res) {
   if (p === CFG.prefix + '/blob/abort') return blobAbort(req, res, url);
   if (p === CFG.prefix + '/login') {
     if (req.method === 'POST') return loginPost(req, res);
-    return loginGet(req, res);
+    return loginGet(req, res, url);
   }
+  if (p === CFG.prefix + '/ticket') return ticketGet(req, res, url);
 
   return proxyHttp(req, res);
 });

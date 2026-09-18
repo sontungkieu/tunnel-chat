@@ -159,6 +159,28 @@ nên mở link chỉ thấy `401 dsh web authentication required` — `?transpor
 2. Nhập **mã PIN** (12 ký tự) — đang nằm ở `.login-key`
 3. Bridge tự ký cookie phiên DSH cho đúng authority của hostname rồi `303` về `/`
 
+### Link một lần, không phải gõ tay
+
+Mở link kèm mã PIN (đúng như bạn hỏi) — vào thẳng, không cần form:
+
+```
+https://<hostname>/__dsh_bridge/login?k=<PIN>
+```
+
+Muốn không đưa mã PIN vĩnh viễn vào URL/history/log proxy thì dùng **ticket dùng một lần**:
+
+```
+GET http://127.0.0.1:3090/__dsh_bridge/ticket?k=<PIN>&host=<hostname>
+-> { "url": "https://<hostname>/__dsh_bridge/login?t=<ticket>", "ttlSeconds": 600, "oneTime": true }
+```
+
+Ticket sống **10 phút**, dùng xong là chết (lần thứ hai trả 403), nên URL có lộ cũng vô hại sau đó.
+
+> **Bài học đã trả giá:** thoạt đầu tôi chặn `/ticket` bằng điều kiện "chỉ loopback". Sai —
+> mọi request qua Cloudflare đều tới bridge **từ 127.0.0.1** (cloudflared nối local), nên điều kiện đó
+> mở toang: ai biết hostname cũng tạo được ticket rồi vào GUI. Hiện `/ticket` **bắt buộc có mã PIN**
+> và tính vào cùng bộ đếm 5 lần sai / IP / phút. Từ chối "loopback" như một hàng rào trong kiến trúc này.
+
 PIN sinh tự động ở lần chạy đầu (bỏ ký tự dễ lẫn `0/O/1/I`), **giới hạn 5 lần sai / IP / phút**.
 Cookie cấp ra sống **30 ngày** — cùng thời hạn DSH tự cấp, và cùng secret ký trong
 `~/.dsh/.credentials.yaml` nên sống qua restart DSH.
