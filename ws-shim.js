@@ -347,16 +347,7 @@
     var q = qs('mobile');
     if (q === '0' || q === 'off') { try { localStorage.setItem('dsh.bridge.mobile', '0'); } catch (e) {} return false; }
     if (q === '1' || q === 'on') { try { localStorage.setItem('dsh.bridge.mobile', '1'); } catch (e) {} return true; }
-    try {
-      var saved = localStorage.getItem('dsh.bridge.mobile');
-      if (saved === '1') return true;
-      if (saved === '0') return false;
-    } catch (e) {}
-    try {
-      var coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
-      var w = window.innerWidth || (typeof screen !== 'undefined' ? screen.width : 0);
-      return !!coarse && w > 0 && w < 1024;
-    } catch (e) { return false; }
+    try { return localStorage.getItem('dsh.bridge.mobile') === '1'; } catch (e) { return false; }
   })();
 
   (function installMobileLayout() {
@@ -381,43 +372,53 @@
       var col = document.querySelector('[class*="_sidebarCol"]') || document;
       return col.querySelector('button[class*="_toggle"]') || col.querySelector('button[aria-label]') || null;
     }
-    function mountToggle() {
-      var tabs = document.querySelector('[role="tablist"]');
-      if (!tabs || !tabs.parentElement) return false;
-      var old = document.getElementById('dsh-mobile-toggle');
-      if (old && old.previousElementSibling === tabs) return true;
-      if (old && old.parentElement) old.parentElement.removeChild(old);
-      var b = document.createElement('button');
+    /* KHONG chen node vao cay React (lam React vo khi reconcile -> man hinh xam).
+       Thay vao do: nut rieng nam ngoai root, chi dat toa do theo hang tab. */
+    function ensureButton() {
+      var b = document.getElementById('dsh-mobile-toggle');
+      if (b) return b;
+      b = document.createElement('button');
       b.id = 'dsh-mobile-toggle';
       b.type = 'button';
       b.setAttribute('aria-label', 'Open sidebar');
       b.title = 'Open sidebar';
-      b.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">'
-        + '<rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" stroke="currentColor" stroke-width="1.2"/>'
-        + '<path d="M6.25 2.75v10.5" stroke="currentColor" stroke-width="1.2"/></svg>';
-      b.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;'
-        + 'margin-left:6px;padding:0;border:0;border-radius:7px;background:transparent;color:inherit;'
-        + 'cursor:pointer;flex:0 0 auto;opacity:.85';
+      b.innerHTML = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">'
+        + '<rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" stroke="currentColor" stroke-width="1.3"/>'
+        + '<path d="M6.25 2.75v10.5" stroke="currentColor" stroke-width="1.3"/></svg>';
+      b.style.cssText = 'position:fixed;z-index:2147483000;display:none;align-items:center;justify-content:center;'
+        + 'width:28px;height:28px;padding:0;border:0;border-radius:7px;background:transparent;color:inherit;'
+        + 'cursor:pointer;opacity:.85';
       b.addEventListener('click', function (ev) {
         ev.preventDefault();
         ev.stopPropagation();
         var t = railToggle();
         if (t) t.click(); else log('mobile: khong tim thay nut toggle cua sidebar');
       });
-      tabs.insertAdjacentElement('afterend', b);
-      return true;
+      document.body.appendChild(b);
+      return b;
     }
-    var tries = 0;
-    var timer = setInterval(function () {
-      tries += 1;
-      if (mountToggle() || tries > 60) clearInterval(timer);
-    }, 400);
-    try {
-      new MutationObserver(function () {
-        if (!document.getElementById('dsh-mobile-toggle')) mountToggle();
-      }).observe(document.documentElement, { childList: true, subtree: true });
-    } catch (e) {}
-    log('che do dien thoai: BAT (an rail, nut nam trong hang tab). Tat: ?mobile=0');
+    function placeButton() {
+      var b = ensureButton();
+      var tabs = document.querySelector('[role="tablist"]');
+      if (!tabs) { b.style.display = 'none'; return; }
+      var r = tabs.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) { b.style.display = 'none'; return; }
+      var size = 28;
+      var left = r.right + 6;
+      if (left + size > window.innerWidth - 4) left = Math.max(4, r.left - size - 6);
+      b.style.display = 'inline-flex';
+      b.style.top = Math.round(r.top + (r.height - size) / 2) + 'px';
+      b.style.left = Math.round(left) + 'px';
+    }
+    var raf = false;
+    function schedule() {
+      if (raf) return;
+      raf = true;
+      requestAnimationFrame(function () { raf = false; try { placeButton(); } catch (e) {} });
+    }
+    if (document.body) { ensureButton(); schedule(); setInterval(schedule, 1000); window.addEventListener('resize', schedule); window.addEventListener('scroll', schedule, true); }
+    else document.addEventListener('DOMContentLoaded', function () { ensureButton(); schedule(); setInterval(schedule, 1000); });
+    log('che do dien thoai: BAT (an rail, nut theo hang tab). Tat: ?mobile=0');
   })();
 
   function BridgeSocket(url, protocols) {
