@@ -356,14 +356,17 @@
     if (typeof document === 'undefined' || !document.head) return;
     var css = [
       '@media (max-width: 1023px) {',
-      '  /* frame = phan tu cha TRUC TIEP cua cot sidebar; :has(> ...) chi khop dung no */',
       '  html[data-dsh-mobile] div:has(> [class*="_sidebarCol"]) { grid-template-columns: 0 minmax(0, 1fr) 0 !important; }',
+      '  /* BAT BUOC khai bao ro tung cot: khi sidebar la position:absolute thi no roi khoi',
+      '     dong chay grid, cac cot con lai bi day len mot o -> cot chat roi vao cot 1',
+      '     (rong 0px) va man hinh trong. Day chinh la loi "khong co phan chat". */',
+      '  html[data-dsh-mobile] [class*="_sidebarCol"] { grid-column: 1 / 2 !important; position: absolute !important; top: 0; bottom: 0; left: 0; width: min(288px, 78vw); z-index: 41; box-shadow: 0 0 32px rgba(0,0,0,.5); }',
+      '  html[data-dsh-mobile] [class*="_centerCol"] { grid-column: 2 / 3 !important; }',
+      '  html[data-dsh-mobile] [class*="_rightbarCol"] { grid-column: 3 / 4 !important; }',
       '  /* thu gon: an han rail */',
       '  html[data-dsh-mobile] [data-sidebar-collapsed] [class*="_sidebarCol"] { display: none !important; }',
-      '  /* mo ra: sidebar thanh drawer noi len, KHONG squeeze chat */',
-      '  html[data-dsh-mobile] [class*="_sidebarCol"] { position: absolute !important; top: 0; bottom: 0; left: 0; width: min(288px, 78vw); z-index: 41; box-shadow: 0 0 32px rgba(0,0,0,.5); }',
       '  html[data-dsh-mobile] [class*="_sidebarCol"] > * { width: min(288px, 78vw) !important; }',
-      '  /* nen mo de thay ro day la drawer, bam vao nen la dong */',
+      '  /* nen mo: thay ro day la drawer, bam nen la dong */',
       '  #dsh-mobile-backdrop { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.45); display: none; }',
       '  html[data-dsh-mobile] body[data-dsh-mobile-open] #dsh-mobile-backdrop { display: block; }',
       '}'
