@@ -346,8 +346,9 @@
   var MOBILE_MODE = (function () {
     var q = qs('mobile');
     if (q === '0' || q === 'off') { try { localStorage.setItem('dsh.bridge.mobile', '0'); } catch (e) {} return false; }
-    if (q === '1' || q === 'on') { try { localStorage.setItem('dsh.bridge.mobile', '1'); } catch (e) {} return true; }
-    try { return localStorage.getItem('dsh.bridge.mobile') === '1'; } catch (e) { return false; }
+    if (q === '1' || q === 'on') return true;
+    try { localStorage.removeItem('dsh.bridge.mobile'); } catch (e) {}
+    return false;
   })();
 
   (function installMobileLayout() {
@@ -355,11 +356,16 @@
     if (typeof document === 'undefined' || !document.head) return;
     var css = [
       '@media (max-width: 1023px) {',
-      '  /* khung frame co style inline grid-template-columns -> anchor on dinh, khong phu thuoc hash class */',
-      '  html[data-dsh-mobile] div[style*="grid-template-columns"] { grid-template-columns: 0 minmax(0, 1fr) 0 !important; }',
+      '  /* frame = phan tu cha TRUC TIEP cua cot sidebar; :has(> ...) chi khop dung no */',
+      '  html[data-dsh-mobile] div:has(> [class*="_sidebarCol"]) { grid-template-columns: 0 minmax(0, 1fr) 0 !important; }',
+      '  /* thu gon: an han rail */',
       '  html[data-dsh-mobile] [data-sidebar-collapsed] [class*="_sidebarCol"] { display: none !important; }',
-      '  html[data-dsh-mobile] [class*="_sidebarCol"] { position: absolute !important; top: 0; bottom: 0; left: 0; width: 288px; z-index: 40; box-shadow: 0 0 32px rgba(0,0,0,.45); }',
-      '  html[data-dsh-mobile] [class*="_sidebarCol"] > * { width: 288px !important; }',
+      '  /* mo ra: sidebar thanh drawer noi len, KHONG squeeze chat */',
+      '  html[data-dsh-mobile] [class*="_sidebarCol"] { position: absolute !important; top: 0; bottom: 0; left: 0; width: min(288px, 78vw); z-index: 41; box-shadow: 0 0 32px rgba(0,0,0,.5); }',
+      '  html[data-dsh-mobile] [class*="_sidebarCol"] > * { width: min(288px, 78vw) !important; }',
+      '  /* nen mo de thay ro day la drawer, bam vao nen la dong */',
+      '  #dsh-mobile-backdrop { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.45); display: none; }',
+      '  html[data-dsh-mobile] body[data-dsh-mobile-open] #dsh-mobile-backdrop { display: block; }',
       '}'
     ].join('\n');
     var style = document.createElement('style');
@@ -397,8 +403,23 @@
       document.body.appendChild(b);
       return b;
     }
+    function ensureBackdrop() {
+      var d = document.getElementById('dsh-mobile-backdrop');
+      if (d) return d;
+      d = document.createElement('div');
+      d.id = 'dsh-mobile-backdrop';
+      d.addEventListener('click', function () {
+        var t = railToggle();
+        if (t) t.click();
+      });
+      document.body.appendChild(d);
+      return d;
+    }
     function placeButton() {
       var b = ensureButton();
+      var collapsed = !!document.querySelector('[data-sidebar-collapsed]');
+      document.body.toggleAttribute('data-dsh-mobile-open', !collapsed);
+      ensureBackdrop();
       var tabs = document.querySelector('[role="tablist"]');
       if (!tabs) { b.style.display = 'none'; return; }
       var r = tabs.getBoundingClientRect();
