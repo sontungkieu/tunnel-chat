@@ -425,11 +425,15 @@
       ensureBackdrop();
       var tabs = document.querySelector('[role="tablist"]');
       if (!tabs) { b.style.display = 'none'; return; }
-      var r = tabs.getBoundingClientRect();
+      /* Neo vao TAB CUOI (chu "Trajectory"), khong phai ca thanh tablist:
+         thanh tablist rong het hang nen r.right nam tan goc phai man hinh. */
+      var anchor = tabs.querySelector('[role="tab"]:last-of-type') || tabs;
+      var r = anchor.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) { r = tabs.getBoundingClientRect(); }
       if (r.width === 0 && r.height === 0) { b.style.display = 'none'; return; }
       var size = 28;
-      var left = r.right + 6;
-      if (left + size > window.innerWidth - 4) left = Math.max(4, r.left - size - 6);
+      var left = r.right + 8;
+      if (left + size > window.innerWidth - 4) left = Math.max(4, r.left - size - 8);
       b.style.display = 'inline-flex';
       b.style.top = Math.round(r.top + (r.height - size) / 2) + 'px';
       b.style.left = Math.round(left) + 'px';
