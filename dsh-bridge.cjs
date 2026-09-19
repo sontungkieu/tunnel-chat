@@ -56,6 +56,34 @@ function log() {
     fs.appendFileSync(LOG_FILE, line + '\n');
   } catch (e) {}
 }
+/* Node TU CHOI header value chua ky tu ngoai Latin-1 (ERR_INVALID_CHAR) va nem loi
+   ngay trong callback cua upstream. DSH dat ten file thang vao content-disposition
+   (vd: attachment; filename="bao cao tieng viet.pdf"), nen MOT file co ten tieng
+   Viet se giet ca tien trinh bridge -> moi request khac cung hong theo. */
+function safeHeaderValue(name, value) {
+  const s = String(value);
+  if (!/[^\t\x20-\x7e\x80-\xff]/.test(s)) return s;
+  if (name.toLowerCase() === 'content-disposition') {
+    let fixed = s.replace(/[^\t\x20-\x7e\x80-\xff]/g, '_');
+    const m = /filename\*?=(?:UTF-8'')?["']?([^"';]+)/i.exec(s);
+    if (m && !/filename\*=UTF-8/i.test(fixed)) {
+      let pct = '';
+      try { pct = encodeURIComponent(m[1]); } catch (e) {}
+      if (pct) fixed = fixed.replace(/[;\s]+$/, '') + "; filename*=UTF-8''" + pct;
+    }
+    return fixed;
+  }
+  return s.replace(/[^\t\x20-\x7e\x80-\xff]/g, '_');
+}
+function sanitizeHeaders(headers) {
+  const out = {};
+  for (const key of Object.keys(headers)) {
+    const value = headers[key];
+    if (Array.isArray(value)) out[key] = value.map(function (v) { return safeHeaderValue(key, v); });
+    else if (value !== void 0) out[key] = safeHeaderValue(key, value);
+  }
+  return out;
+}
 function sendJson(res, status, obj) {
   const body = Buffer.from(JSON.stringify(obj), 'utf8');
   res.writeHead(status, {
@@ -114,13 +142,17 @@ function proxyHttp(req, res) {
     headers: headers,
   }, function (upRes) {
     stats.http += 1;
+    upRes.on('error', function (e) {
+      log('upstream response error ' + (req.method || '') + ' ' + req.url + ': ' + e.message);
+      try { res.destroy(); } catch (e2) {}
+    });
     const ctype = String(upRes.headers['content-type'] || '');
     const bodyBytes = Number(req.headers['content-length'] || 0);
     if (upRes.statusCode >= 400 || bodyBytes > 100 * 1024) {
       log('HTTP', req.method, req.url, '->', upRes.statusCode, 'body=' + (bodyBytes || 'chunked') + 'B');
     }
     if (!ctype.toLowerCase().startsWith('text/html')) {
-      res.writeHead(upRes.statusCode, upRes.headers);
+      res.writeHead(upRes.statusCode, sanitizeHeaders(upRes.headers));
       upRes.pipe(res);
       return;
     }
@@ -130,7 +162,7 @@ function proxyHttp(req, res) {
       let html = Buffer.concat(chunks).toString('utf8');
       if (html.indexOf(CFG.prefix + '/ws-shim.js') === -1) html = injectShim(html);
       const out = Buffer.from(html, 'utf8');
-      const h = Object.assign({}, upRes.headers);
+      const h = sanitizeHeaders(upRes.headers);
       delete h['content-encoding'];
       delete h['transfer-encoding'];
       h['content-length'] = out.length;
@@ -746,7 +778,9 @@ function diagPage() {
  * ------------------------------------------------------------------ */
 
 const server = http.createServer(function (req, res) {
-  const url = new URL(req.url, 'http://internal');
+  let url;
+  try { url = new URL(req.url, 'http://internal'); }
+  catch (e) { log('URL khong hop le: ' + req.url); try { res.writeHead(400, { 'content-type': 'text/plain' }); res.end('bad url'); } catch (e2) {} return; }
   const p = url.pathname;
 
   if (p === CFG.prefix + '/ws-shim.js') {
@@ -805,6 +839,13 @@ const server = http.createServer(function (req, res) {
   if (p === CFG.prefix + '/ticket') return ticketGet(req, res, url);
 
   return proxyHttp(req, res);
+});
+
+process.on('uncaughtException', function (e) {
+  log('UNCAUGHT: ' + (e && e.stack ? e.stack : String(e)));
+});
+process.on('unhandledRejection', function (e) {
+  log('UNHANDLED REJECTION: ' + (e && e.stack ? e.stack : String(e)));
 });
 
 server.on('upgrade', function (req, socket, head) {
