@@ -433,6 +433,9 @@
       var collapsed = !!document.querySelector('[data-sidebar-collapsed]');
       document.body.toggleAttribute('data-dsh-mobile-open', !collapsed);
       ensureBackdrop();
+      /* Dang MO sidebar thi an nut nay: drawer da co nut thu gon rieng, va de no
+         noi tren nen mo trong rat kho coi. */
+      if (!collapsed) { b.style.display = 'none'; return; }
       var tabs = document.querySelector('[role="tablist"]');
       if (!tabs) { b.style.display = 'none'; return; }
       /* Neo vao TAB CUOI (chu "Trajectory"), khong phai ca thanh tablist:
