@@ -337,6 +337,61 @@
     log('RPC chunking: nguong ' + RPC_THRESHOLD + 'B, manh dau ' + RPC_CHUNK + 'B, tu giam khi 413 (doi bang ?rpcchunk=)');
   })();
 
+  /* ---- che do dien thoai (opt-in: ?mobile=1) ----
+     DSH duoi 1024px tu thu gon sidebar thanh "rail" 56px, VA nut mo sidebar nam
+     ngay trong rail do. Nen: an han rail, thay bang nut noi (FAB) goi chinh nut
+     ay; va doi sidebar mo rong thanh drawer noi len thay vi squeeze khung chat. */
+  var MOBILE_MODE = (function () {
+    var q = qs('mobile');
+    if (q === '0' || q === 'off') { try { localStorage.setItem('dsh.bridge.mobile', '0'); } catch (e) {} return false; }
+    if (q === '1' || q === 'on') { try { localStorage.setItem('dsh.bridge.mobile', '1'); } catch (e) {} return true; }
+    try { return localStorage.getItem('dsh.bridge.mobile') === '1'; } catch (e) { return false; }
+  })();
+
+  (function installMobileLayout() {
+    if (!MOBILE_MODE) { log('che do dien thoai: TAT (bat bang ?mobile=1)'); return; }
+    if (typeof document === 'undefined' || !document.head) return;
+    var css = [
+      '@media (max-width: 1023px) {',
+      '  html[data-dsh-mobile] [data-sidebar-collapsed] > [class*="_sidebarCol"] { display: none !important; }',
+      '  html[data-dsh-mobile] div:has(> [class*="_sidebarCol"]) { grid-template-columns: 0 minmax(0, 1fr) 0 !important; }',
+      '  html[data-dsh-mobile] [class*="_sidebarCol"] { position: absolute !important; top: 0; bottom: 0; left: 0; width: 288px; z-index: 40; box-shadow: 0 0 32px rgba(0,0,0,.45); }',
+      '  html[data-dsh-mobile] [class*="_sidebarCol"] > * { width: 288px !important; }',
+      '}'
+    ].join('\n');
+    var style = document.createElement('style');
+    style.id = 'dsh-mobile-style';
+    style.textContent = css;
+    document.documentElement.setAttribute('data-dsh-mobile', '');
+    document.head.appendChild(style);
+
+    function toggleButton() {
+      var col = document.querySelector('[class*="_sidebarCol"]') || document;
+      return col.querySelector('button[class*="_toggle"]') || col.querySelector('button[aria-label]') || null;
+    }
+    function mountFab() {
+      if (document.getElementById('dsh-mobile-fab')) return;
+      var b = document.createElement('button');
+      b.id = 'dsh-mobile-fab';
+      b.type = 'button';
+      b.setAttribute('aria-label', 'Open sidebar');
+      b.textContent = '\u2630';
+      b.style.cssText = 'position:fixed;left:10px;top:calc(env(safe-area-inset-top, 0px) + 10px);z-index:35;'
+        + 'width:40px;height:40px;padding:0;border-radius:12px;border:1px solid rgba(255,255,255,.18);'
+        + 'background:rgba(18,20,26,.86);color:#fff;font-size:17px;line-height:1;display:flex;'
+        + 'align-items:center;justify-content:center;backdrop-filter:blur(6px);cursor:pointer';
+      b.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var t = toggleButton();
+        if (t) t.click(); else log('mobile: khong tim thay nut toggle cua sidebar');
+      });
+      document.body.appendChild(b);
+    }
+    if (document.body) mountFab();
+    else document.addEventListener('DOMContentLoaded', mountFab);
+    log('che do dien thoai: BAT (an rail, nut noi goc trai). Tat: ?mobile=0');
+  })();
+
   function BridgeSocket(url, protocols) {
     if (!isMuxUrl(url)) return new NativeWS(url, protocols);
     var self = this;
