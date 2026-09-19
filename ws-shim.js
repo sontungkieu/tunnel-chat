@@ -346,9 +346,19 @@
   var MOBILE_MODE = (function () {
     var q = qs('mobile');
     if (q === '0' || q === 'off') { try { localStorage.setItem('dsh.bridge.mobile', '0'); } catch (e) {} return false; }
-    if (q === '1' || q === 'on') return true;
-    try { localStorage.removeItem('dsh.bridge.mobile'); } catch (e) {}
-    return false;
+    if (q === '1' || q === 'on') { try { localStorage.setItem('dsh.bridge.mobile', '1'); } catch (e) {} return true; }
+    try {
+      var saved = localStorage.getItem('dsh.bridge.mobile');
+      if (saved === '1') return true;
+      if (saved === '0') return false;
+    } catch (e) {}
+    /* Tu bat tren dien thoai: cam ung (pointer coarse) + man hinh hep.
+       Chuot/desktop khong bi anh huong. Tat: ?mobile=0 (nho luon). */
+    try {
+      var coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+      var w = window.innerWidth || (typeof screen !== 'undefined' ? screen.width : 0);
+      return !!coarse && w > 0 && w < 1024;
+    } catch (e) { return false; }
   })();
 
   (function installMobileLayout() {
