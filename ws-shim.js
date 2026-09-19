@@ -242,14 +242,17 @@
      Proxy cong ty co the tra 413 cho POST qua lon (thuong gap khi dan anh vao
      o chat: anh duoc base64 ngay trong /api/session/prompt). Shim chan fetch
      cua trang va day body qua giao thuc blob cua bridge. */
-  var RPC_THRESHOLD = (function () {
+  /* Che do cat nho RPC: khong tham so -> auto | ?rpcchunk=0 -> tat han
+     | ?rpcchunk=1 -> luon cat | ?rpcchunk=8192 -> luon cat voi manh 8 KB */
+  var RPC_MODE = 'auto';
+  var RPC_THRESHOLD = 8192;
+  var RPC_QUERY_CHUNK = 0;
+  (function () {
     var q = qs('rpcchunk');
-    if (q === 'reset') { try { localStorage.removeItem('dsh.bridge.rpcsize'); } catch (e) {} return 0; }
-    if (q && /^[0-9]+$/.test(q)) { var v = Number(q); try { localStorage.setItem('dsh.bridge.rpcsize', String(v)); } catch (e) {} return v; }
-    try { return Number(localStorage.getItem('dsh.bridge.rpcsize')) || 0; } catch (e) { return 0; }
+    if (q === '0' || q === 'off') { RPC_MODE = 'off'; return; }
+    if (q === '1' || q === 'on') { RPC_MODE = 'always'; return; }
+    if (q && /^[0-9]+$/.test(q)) { var v = Number(q); if (v >= 4096) { RPC_MODE = 'always'; RPC_QUERY_CHUNK = Math.min(v, 1048576); } }
   })();
-  if (!RPC_THRESHOLD || RPC_THRESHOLD < 2048) RPC_THRESHOLD = 8192;
-  if (RPC_THRESHOLD > 64 * 1024 * 1024) RPC_THRESHOLD = 64 * 1024 * 1024;
 
   /* Manh gui RPC: bat dau 16 KB roi TU GIAM khi bi 413 (proxy moi noi khac nhau,
      va khong biet truoc tran). Giam den 4 KB, ghi nho cho lan sau. */
@@ -258,6 +261,7 @@
     try { var v = Number(localStorage.getItem(RPC_CHUNK_KEY)) || 0; if (v >= 4096 && v <= 1048576) return v; } catch (e) {}
     return 16384;
   })();
+  if (RPC_QUERY_CHUNK > 0) RPC_CHUNK = RPC_QUERY_CHUNK;
 
   function chunkedRpc(path, headers, body, bytes) {
     var chunkSize = RPC_CHUNK;
@@ -313,6 +317,7 @@
   (function installRpcChunking() {
     var nativeFetch = window.fetch;
     if (typeof nativeFetch !== 'function') return;
+    var saw413 = false;
     window.fetch = function (input, init) {
       try {
         var raw = '';
@@ -327,14 +332,28 @@
             var h = init.headers;
             if (h && typeof h.forEach === 'function') h.forEach(function (v, k) { hdrs[String(k).toLowerCase()] = String(v); });
             else if (h) { for (var k in h) { if (Object.prototype.hasOwnProperty.call(h, k)) hdrs[String(k).toLowerCase()] = String(h[k]); } }
-            log('RPC ' + bytes + 'B > nguong ' + RPC_THRESHOLD + 'B -> cat nho: ' + u.pathname);
-            return chunkedRpc(u.pathname + u.search, hdrs, init.body, bytes);
+            var path = u.pathname + u.search;
+            if (RPC_MODE === 'off') return nativeFetch.call(this, input, init);
+            if (RPC_MODE === 'always' || saw413) {
+              log('RPC ' + bytes + 'B -> cat nho: ' + u.pathname);
+              return chunkedRpc(path, hdrs, init.body, bytes);
+            }
+            /* AUTO: gui THANG mot lan cho nhanh. Chi khi bi 413 moi cat nho, va
+               ghi nho mang nay co tran -> cac request sau cat luon. */
+            return nativeFetch.call(this, input, init).then(function (res) {
+              if (res && res.status === 413) {
+                saw413 = true;
+                log('RPC ' + bytes + 'B bi 413 -> gui lai dang cat nho');
+                return chunkedRpc(path, hdrs, init.body, bytes);
+              }
+              return res;
+            });
           }
         }
       } catch (e) { log('rpc chunk check loi: ' + (e && e.message)); }
       return nativeFetch.apply(this, arguments);
     };
-    log('RPC chunking: nguong ' + RPC_THRESHOLD + 'B, manh dau ' + RPC_CHUNK + 'B, tu giam khi 413 (doi bang ?rpcchunk=)');
+    log('RPC chunk: che do ' + RPC_MODE + ' | nguong ' + RPC_THRESHOLD + 'B | manh ' + RPC_CHUNK + 'B | auto = gui thang, chi cat khi 413');
   })();
 
   /* ---- che do dien thoai ----
