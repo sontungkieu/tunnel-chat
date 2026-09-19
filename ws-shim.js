@@ -450,7 +450,8 @@
     function placeButton() {
       var b = ensureButton();
       var collapsed = !!document.querySelector('[data-sidebar-collapsed]');
-      document.body.toggleAttribute('data-dsh-mobile-open', !collapsed);
+      var wantOpen = !collapsed;
+      if (document.body.hasAttribute('data-dsh-mobile-open') !== wantOpen) document.body.toggleAttribute('data-dsh-mobile-open', wantOpen);
       ensureBackdrop();
       /* Dang MO sidebar thi an nut nay: drawer da co nut thu gon rieng, va de no
          noi tren nen mo trong rat kho coi. */
@@ -476,8 +477,30 @@
       raf = true;
       requestAnimationFrame(function () { raf = false; try { placeButton(); } catch (e) {} });
     }
-    if (document.body) { ensureButton(); schedule(); setInterval(schedule, 1000); window.addEventListener('resize', schedule); window.addEventListener('scroll', schedule, true); }
-    else document.addEventListener('DOMContentLoaded', function () { ensureButton(); schedule(); setInterval(schedule, 1000); });
+    /* Phan ung NGAY khi sidebar mo/thu gon. Chi DOC attribute cua frame va chi
+       GHI vao phan tu cua minh => khong dung vao cay DOM cua React (bai hoc vu
+       man hinh xam). Truoc day kiem tra bang setInterval 1 giay nen tre 1 giay. */
+    var frameEl = null;
+    var frameObs = null;
+    function watchFrame() {
+      var el = document.querySelector('div[style*="grid-template-columns"]');
+      if (!el || el === frameEl) return;
+      frameEl = el;
+      if (!frameObs) frameObs = new MutationObserver(function () { schedule(); });
+      else frameObs.disconnect();
+      try { frameObs.observe(el, { attributes: true, attributeFilter: ['data-sidebar-collapsed', 'style'] }); } catch (e) {}
+      schedule();
+    }
+    function boot() {
+      ensureButton();
+      watchFrame();
+      schedule();
+      setInterval(function () { watchFrame(); schedule(); }, 2000);
+      window.addEventListener('resize', schedule);
+      window.addEventListener('scroll', schedule, true);
+    }
+    if (document.body) boot();
+    else document.addEventListener('DOMContentLoaded', boot);
     log('che do dien thoai: BAT (an rail, nut theo hang tab). Tat: ?mobile=0');
   })();
 
