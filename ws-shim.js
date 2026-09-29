@@ -314,6 +314,27 @@
     });
   }
 
+  /* Doc than request thanh chuoi de cat nho. Ho tro ca body dang string (RPC
+     JSON) lan ReadableStream (DSH gui prompt lon bang stream, khong phai string
+     - neu chi nhan string thi nhung request do di thang va bi proxy cat). */
+  function readBodyText(body) {
+    if (typeof body === 'string') return Promise.resolve(body);
+    if (body && typeof body.getReader === 'function') {
+      var reader = body.getReader();
+      var dec = new TextDecoder('utf-8');
+      var acc = '';
+      function pump() {
+        return reader.read().then(function (r) {
+          if (r.done) return acc + dec.decode();
+          acc += dec.decode(r.value, { stream: true });
+          return pump();
+        });
+      }
+      return pump();
+    }
+    return null;
+  }
+
   (function installRpcChunking() {
     var nativeFetch = window.fetch;
     if (typeof nativeFetch !== 'function') return;
@@ -324,31 +345,57 @@
         if (typeof input === 'string') raw = input;
         else if (input && typeof input.href === 'string') raw = input.href;
         else if (input && typeof input.url === 'string') raw = input.url;
-        if (raw && raw.indexOf('/api/') !== -1 && init && init.method === 'POST' && typeof init.body === 'string') {
-          var bytes = new Blob([init.body]).size;
-          if (bytes > RPC_THRESHOLD) {
+        if (raw && raw.indexOf('/api/') !== -1 && init && !init.__bridgeBodyRead &&
+            (init.method === 'POST' || init.method === 'post') &&
+            (typeof init.body === 'string' || (init.body && typeof init.body.getReader === 'function'))) {
+          var text = readBodyText(init.body);
+          if (text === null) return nativeFetch.apply(this, arguments);
+          var self = this;
+          var args = arguments;
+          return text.then(function (txtBody) {
+            var bytes = new Blob([txtBody]).size;
+            if (bytes <= RPC_THRESHOLD) {
+              return nativeFetch.call(self, input, {
+                method: init.method,
+                headers: init.headers,
+                body: txtBody,
+                credentials: init.credentials,
+                cache: init.cache,
+                mode: init.mode,
+                signal: init.signal
+              });
+            }
             var u = new URL(raw, window.location.href);
             var hdrs = {};
             var h = init.headers;
             if (h && typeof h.forEach === 'function') h.forEach(function (v, k) { hdrs[String(k).toLowerCase()] = String(v); });
             else if (h) { for (var k in h) { if (Object.prototype.hasOwnProperty.call(h, k)) hdrs[String(k).toLowerCase()] = String(h[k]); } }
             var path = u.pathname + u.search;
-            if (RPC_MODE === 'off') return nativeFetch.call(this, input, init);
+            var direct = function () {
+              init.body = txtBody;
+              return nativeFetch.call(self, input, init);
+            };
+            if (RPC_MODE === 'off') return direct();
             if (RPC_MODE === 'always' || saw413) {
               log('RPC ' + bytes + 'B -> cat nho: ' + u.pathname);
-              return chunkedRpc(path, hdrs, init.body, bytes);
+              return chunkedRpc(path, hdrs, txtBody, bytes);
             }
             /* AUTO: gui THANG mot lan cho nhanh. Chi khi bi 413 moi cat nho, va
                ghi nho mang nay co tran -> cac request sau cat luon. */
-            return nativeFetch.call(this, input, init).then(function (res) {
+            return direct().then(function (res) {
               if (res && res.status === 413) {
                 saw413 = true;
                 log('RPC ' + bytes + 'B bi 413 -> gui lai dang cat nho');
-                return chunkedRpc(path, hdrs, init.body, bytes);
+                return chunkedRpc(path, hdrs, txtBody, bytes);
               }
               return res;
             });
-          }
+          }, function (err) {
+            /* Doc stream loi (proxy cat giua duong) - tra loi that bai ro rang
+               thay vi de request treo. */
+            log('doc body stream loi: ' + (err && err.message));
+            throw err;
+          });
         }
       } catch (e) { log('rpc chunk check loi: ' + (e && e.message)); }
       return nativeFetch.apply(this, arguments);
