@@ -11,6 +11,17 @@
 (function () {
   'use strict';
   var PREFIX = '__PREFIX__';
+  /* Worker duoc tao tu blob: URL. Trong blob worker, URL TUONG DOI khong
+     phan giai duoc: fetch('/x') nem "Failed to parse URL" ngay tai cho, nen
+     request khong bao gio cham toi bridge. Phai dung URL tuyet doi. */
+  var ORIGIN = '__ORIGIN__';
+  if (!/^https?:\/\//.test(ORIGIN)) {
+    try {
+      var fallbackOrigin = self.location && self.location.origin;
+      if (fallbackOrigin && /^https?:\/\//.test(fallbackOrigin)) ORIGIN = fallbackOrigin;
+    } catch (e) {}
+  }
+  function bridgeUrl(path) { return ORIGIN + PREFIX + path; }
   var CHUNK = __CHUNK_BYTES__;
   var THRESHOLD = __THRESHOLD_BYTES__;
   var UPLOAD_PATH = '/api/session/uploadFileBinary';
@@ -20,8 +31,22 @@
     try { return String(url).indexOf(UPLOAD_PATH) !== -1; } catch (e) { return false; }
   }
 
+  /* Bao loi that su tu trong worker ve bridge (worker khong dung chung
+     console voi trang). */
+  function reportWorker(kind, data) {
+    try {
+      fetch(bridgeUrl('/clientlog'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: kind, data: data, from: 'upload-worker', origin: ORIGIN }),
+        credentials: 'same-origin',
+        keepalive: true
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
   function postJson(path, obj) {
-    return fetch(PREFIX + path, {
+    return fetch(bridgeUrl(path), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(obj),
@@ -44,7 +69,7 @@
         var end = Math.min(offset + CHUNK, blob.size);
         var slice = blob.slice(offset, end);
         var thisSeq = seq;
-        return fetch(PREFIX + '/blob/chunk?bid=' + encodeURIComponent(bid) + '&seq=' + thisSeq, {
+        return fetch(bridgeUrl('/blob/chunk?bid=' + encodeURIComponent(bid) + '&seq=' + thisSeq), {
           method: 'POST',
           headers: { 'content-type': 'application/octet-stream' },
           body: slice,
@@ -58,13 +83,28 @@
         });
       }
       return next().then(function () {
-        return fetch(PREFIX + '/blob/finish?bid=' + encodeURIComponent(bid), { method: 'POST', credentials: 'same-origin' });
+        return fetch(bridgeUrl('/blob/finish?bid=' + encodeURIComponent(bid)), { method: 'POST', credentials: 'same-origin' });
       }).then(function (r) {
         return r.text().then(function (text) { return { status: r.status, body: text }; });
       }, function (e) {
-        try { fetch(PREFIX + '/blob/abort?bid=' + encodeURIComponent(bid), { method: 'POST', credentials: 'same-origin' }); } catch (e2) {}
+        reportWorker('worker-chunk-failed', {
+          message: String((e && e.message) || e),
+          url: url,
+          size: blob.size
+        });
+        try { fetch(bridgeUrl('/blob/abort?bid=' + encodeURIComponent(bid)), { method: 'POST', credentials: 'same-origin' }); } catch (e2) {}
         throw e;
       });
+    }, function (e) {
+      reportWorker('worker-blob-init-failed', {
+        name: e && e.name,
+        message: String((e && e.message) || e),
+        origin: ORIGIN,
+        prefix: PREFIX,
+        chunk: CHUNK,
+        stack: e && e.stack ? String(e.stack).slice(0, 500) : ''
+      });
+      throw e;
     });
   }
 

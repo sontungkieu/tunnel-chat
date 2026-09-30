@@ -276,6 +276,40 @@
         return origLoad.call(this, spec);
       };
     }
+    /* Boc Worker de bat ket qua upload cua DSH (worker upload gui ve
+       {kind:'complete'|'error'}). Khong co buoc nay thi loi upload nam
+       trong worker, khong bao gio noi ra ngoai. */
+    try {
+      var NativeWorker = window.Worker;
+      if (typeof NativeWorker === 'function') {
+        var TracedWorker = function (url, options) {
+          var w = new NativeWorker(url, options);
+          try {
+            w.addEventListener('message', function (ev) {
+              var d = ev && ev.data;
+              if (!d || typeof d !== 'object') return;
+              if (d.kind === 'error') {
+                report('upload-worker-error', {
+                  worker: (options && options.name) || '',
+                  message: String(d.message || '').slice(0, 400)
+                });
+              } else if (d.kind === 'complete' && d.status !== 200) {
+                report('upload-worker-bad-status', {
+                  worker: (options && options.name) || '',
+                  status: d.status,
+                  body: d.body === undefined ? null : String(d.body).slice(0, 300)
+                });
+              }
+            });
+          } catch (e) {}
+          return w;
+        };
+        TracedWorker.prototype = NativeWorker.prototype;
+        try { Object.setPrototypeOf(TracedWorker, NativeWorker); } catch (e) {}
+        window.Worker = TracedWorker;
+      }
+    } catch (e) {}
+
     try {
       if (window.__ModuleLoader__) hookLoader(window.__ModuleLoader__);
       else {
@@ -384,8 +418,24 @@
         if (Array.isArray(parts) && parts.length === 1 && typeof parts[0] === 'string') {
           var text = parts[0];
           if (text.indexOf('fileUploadWorker') !== -1) {
-            var src = patch.split('__PREFIX__').join(PREFIX).split('__CHUNK_BYTES__').join(String(chunkBytes)).split('__THRESHOLD_BYTES__').join(String(thresholdBytes));
-            log('tiem lop chunking vao worker upload (chunk ' + chunkBytes + 'B, nguong ' + thresholdBytes + 'B)');
+            /* Worker chay tu blob: URL nen phai co origin tuyet doi, neu
+               khong fetch('/...') trong worker se nem loi ngay. */
+            var origin = '';
+            try { origin = window.location.origin || ''; } catch (e) {}
+            if (!/^https?:\/\//.test(origin)) origin = '';
+            var src = patch.split('__PREFIX__').join(PREFIX)
+              .split('__ORIGIN__').join(origin)
+              .split('__CHUNK_BYTES__').join(String(chunkBytes))
+              .split('__THRESHOLD_BYTES__').join(String(thresholdBytes));
+            log('tiem lop chunking vao worker upload (chunk ' + chunkBytes + 'B, nguong ' + thresholdBytes + 'B, origin ' + (origin || 'tu tinh') + ')');
+            if (window.__DSH_BRIDGE_REPORT__) {
+              window.__DSH_BRIDGE_REPORT__('upload-worker-patched', {
+                chunk: chunkBytes,
+                threshold: thresholdBytes,
+                origin: origin,
+                marker: true
+              });
+            }
             parts = [src + ';' + text];
           } else if (text.indexOf('Iterator.prototype.join') !== -1) {
             log('tiem compat polyfill vao worker PDF');

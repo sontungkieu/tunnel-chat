@@ -358,10 +358,38 @@ setInterval(function () {
 const blobs = new Map();
 const BLOB_IDLE_MS = 10 * 60 * 1000;
 
+/* Chuan hoa dich cua blob upload.
+   Lop RPC trong trang gui duong dan tuong doi ("/api/..."), con Worker upload
+   cua DSH gui URL TUYET DOI ("http://host/api/...") vi worker chay tren
+   blob: URL va phai tu dung URL tuyet doi. Nhan ca hai dang, nhung van chan
+   tro nguoc vao chinh bridge (tranh vong lap). */
+function normalizeBridgeTarget(raw) {
+  const s = String(raw || '').trim();
+  if (s === '') return '';
+  let pathname = s;
+  let search = '';
+  const schemeAt = s.indexOf('://');
+  if (schemeAt > 0 && /^[a-z][a-z\d+.-]*$/i.test(s.slice(0, schemeAt))) {
+    let u;
+    try { u = new URL(s); } catch (e) { return ''; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    pathname = u.pathname;
+    search = u.search;
+  } else {
+    if (s.charAt(0) !== '/') return '';
+    const q = s.indexOf('?');
+    if (q !== -1) { pathname = s.slice(0, q); search = s.slice(q); }
+  }
+  if (pathname.charAt(0) !== '/') return '';
+  if (pathname.indexOf(CFG.prefix) === 0) return '';
+  return pathname + search;
+}
+
 function blobInit(req, res) {
   readJson(req).then(function (body) {
-    const target = String(body.url || '');
-    if (target.charAt(0) !== '/' || target.indexOf(CFG.prefix) === 0) {
+    const target = normalizeBridgeTarget(body.url);
+    if (target === '') {
+      log('BLOB init bi tu choi, url = ' + String(body.url || '').slice(0, 160));
       return sendJson(res, 400, { error: 'invalid target url' });
     }
     const forwarded = {};
