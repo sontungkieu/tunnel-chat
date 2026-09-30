@@ -838,6 +838,25 @@ const server = http.createServer(function (req, res) {
   }
   if (p === CFG.prefix + '/ticket') return ticketGet(req, res, url);
 
+  /* Nhan bao loi tu trinh duyet khach (may cong ty khong doc duoc console).
+     Ghi ra client-error.log de chan doan tu xa. */
+  if (p === CFG.prefix + '/clientlog') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'POST only' });
+    readBody(req).then(function (buf) {
+      let txt = buf.toString('utf8');
+      if (txt.length > 30000) txt = txt.slice(0, 30000);
+      let rec;
+      try { rec = JSON.parse(txt); } catch (e) { rec = { kind: 'raw', data: txt }; }
+      const line = '[' + new Date().toISOString() + '] CLIENT ' + JSON.stringify(rec);
+      log(line.length > 4000 ? line.slice(0, 4000) + '...' : line);
+      try { fs.appendFileSync(path.join(__dirname, 'client-error.log'), line + '\n'); } catch (e) {}
+      sendJson(res, 200, { ok: true });
+    }).catch(function (e) {
+      sendJson(res, 400, { error: String((e && e.message) || e) });
+    });
+    return;
+  }
+
   return proxyHttp(req, res);
 });
 

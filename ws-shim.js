@@ -151,6 +151,168 @@
   var mode = readMode() || 'auto';
   var abnormalCloses = 0;
 
+  /* ---- bao loi client ve bridge ----
+     May cong ty khong cho mo console, nen moi loi (uncaught, unhandled
+     rejection, plugin import hong, script 404) duoc gui ve
+     /__dsh_bridge/clientlog de doc tu xa trong bridge.log / client-error.log.
+     Tat: ?clientlog=0 */
+  (function installClientErrorReporting() {
+    if (qs('clientlog') === '0') return;
+    var MAX = 80, sent = 0, seen = {};
+    var loadedIds = [];
+    function report(kind, data) {
+      if (sent >= MAX) return;
+      var key = kind + '|' + String((data && (data.id || data.source || data.message)) || '');
+      if (seen[key]) return;
+      seen[key] = 1;
+      sent += 1;
+      try {
+        fetch(PREFIX + '/clientlog', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            kind: kind,
+            data: data,
+            page: String(location.href),
+            ua: navigator.userAgent,
+            transport: (window.__DSH_BRIDGE__ && window.__DSH_BRIDGE__.mode) ? window.__DSH_BRIDGE__.mode() : mode
+          }),
+          credentials: 'same-origin',
+          cache: 'no-store',
+          keepalive: true
+        }).catch(function () {});
+      } catch (e) {}
+    }
+    window.__DSH_BRIDGE_REPORT__ = report;
+
+    /* ---- tai lai khi trang dang giu BAN CU ----
+       Sau moi lan nang cap DSH, ten file asset doi (index-<hash>.js). Neu
+       tab dang mo giu tai lieu cu, trinh duyet se doi asset cu -> 404 ->
+       app khong nap duoc plugin (vd: "file resource service is unavailable").
+       Tu tai lai DUNG MOT LAN (co gian cach) de lay build moi. */
+    var RELOAD_KEY = 'dsh.bridge.reloadedAt';
+    function forceReload(why) {
+      var prev = null;
+      try { prev = sessionStorage.getItem(RELOAD_KEY); } catch (e) {}
+      var now = Date.now();
+      if (prev !== null && now - Number(prev) < 120000) {
+        report('reload-skipped', { why: String(why).slice(0, 200), sinceMs: now - Number(prev) });
+        return;
+      }
+      try { sessionStorage.setItem(RELOAD_KEY, String(now)); } catch (e) { return; }
+      report('auto-reload', { why: String(why).slice(0, 300) });
+      setTimeout(function () {
+        try {
+          var u = new URL(location.href);
+          u.searchParams.set('_r', String(now));
+          location.replace(u.href);
+        } catch (e) {
+          try { location.reload(); } catch (e2) {}
+        }
+      }, 400);
+    }
+
+    try {
+      window.addEventListener('error', function (ev) {
+        if (ev && ev.target && ev.target !== window && ev.target.tagName) {
+          var tag = String(ev.target.tagName);
+          var src = ev.target.src || ev.target.href || '';
+          if (tag === 'SCRIPT' || tag === 'LINK') {
+            report('resource-load-failed', { tag: tag, source: String(src).slice(0, 500) });
+            /* Chi tai lai khi asset cua CHINH build hien tai bi thieu. */
+            if (String(src).indexOf('/assets/') !== -1) forceReload('asset 404: ' + String(src).slice(-60));
+          }
+          return;
+        }
+        var msg = (ev && ev.message) || 'script error';
+        if (msg.indexOf('dsh-bridge') !== -1) return;
+        report('uncaught', {
+          message: String(msg).slice(0, 500),
+          source: String((ev && ev.filename) || '').slice(0, 400),
+          line: ev && ev.lineno,
+          col: ev && ev.colno,
+          stack: ev && ev.error && ev.error.stack ? String(ev.error.stack).slice(0, 2500) : ''
+        });
+      }, true);
+    } catch (e) {}
+
+    try {
+      window.addEventListener('unhandledrejection', function (ev) {
+        var r = ev && ev.reason;
+        report('unhandledrejection', {
+          message: String((r && r.message) || r).slice(0, 500),
+          stack: r && r.stack ? String(r.stack).slice(0, 2500) : ''
+        });
+      });
+    } catch (e) {}
+
+    /* Bat plugin nao nem loi luc factory chay: day la nguyen nhan hang dau
+       khien mot plugin khong bao gio duoc dang ky (vd file resource). */
+    var loaderValue;
+    function hookLoader(loader) {
+      if (!loader || loader.__bridgeHooked === true) return;
+      var origLoad = loader.load;
+      if (typeof origLoad !== 'function') return;
+      loader.__bridgeHooked = true;
+      loader.load = function (spec) {
+        try {
+          if (spec && typeof spec.id === 'string') loadedIds.push(spec.id);
+          if (spec && typeof spec.factory === 'function') {
+            var orig = spec.factory;
+            spec.factory = function (require) {
+              try {
+                return orig.call(this, require);
+              } catch (e) {
+                report('plugin-factory-threw', {
+                  id: spec.id,
+                  message: String((e && e.message) || e).slice(0, 500),
+                  stack: e && e.stack ? String(e.stack).slice(0, 2500) : ''
+                });
+                throw e;
+              }
+            };
+          }
+        } catch (e) {}
+        return origLoad.call(this, spec);
+      };
+    }
+    try {
+      if (window.__ModuleLoader__) hookLoader(window.__ModuleLoader__);
+      else {
+        Object.defineProperty(window, '__ModuleLoader__', {
+          configurable: true,
+          get: function () { return loaderValue; },
+          set: function (v) { loaderValue = v; try { hookLoader(v); } catch (e) {} }
+        });
+      }
+    } catch (e) {}
+
+    /* Khi giao dien hien dung cau loi nay thi gui kem trang thai plugin,
+       de biet plugin nao chua duoc nap. */
+    var probed = 0;
+    function probe() {
+      probed += 1;
+      if (probed > 40) return;
+      try {
+        if (!document || !document.body) return;
+        var txt = document.body.innerText || '';
+        if (txt.indexOf('file resource service is unavailable') !== -1 ||
+            txt.indexOf('\u6587\u4ef6\u8d44\u6e90\u670d\u52a1\u4e0d\u53ef\u7528') !== -1) {
+          report('resource-unavailable-seen', {
+            ids: loadedIds.filter(function (id) {
+              return /workspace-files|client-resources|api-gateway|documentpreview|sidebar-files|client-modules/.test(id);
+            }),
+            loadedCount: loadedIds.length,
+            boot: (function () { try { return Object.keys(window.__DSH_BOOT__ || {}); } catch (e) { return null; } })()
+          });
+          if (probed > 4) return;
+        }
+      } catch (e) {}
+    }
+    if (document && document.body) setInterval(probe, 2000);
+    else if (document) document.addEventListener('DOMContentLoaded', function () { setInterval(probe, 2000); });
+  })();
+
   /* ---- upload chunking: tiem lop cat nho vao Worker upload cua DSH ---- */
   var chunkBytes = (function () {
     var q = qs('chunk');
