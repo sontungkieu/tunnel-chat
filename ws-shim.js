@@ -550,7 +550,18 @@
   (function installRpcChunking() {
     var nativeFetch = window.fetch;
     if (typeof nativeFetch !== 'function') return;
-    var saw413 = false;
+    /* Ghi nho "mang nay co tran" theo PHIEN TAB, de sau khi tai lai, lan gui
+       lon ke tiep cat nho ngay thay vi that bai mot lan roi moi thu lai. */
+    var RPC_413_KEY = 'dsh.bridge.saw413';
+    var saw413 = (function () {
+      try { return sessionStorage.getItem(RPC_413_KEY) === '1'; } catch (e) { return false; }
+    })();
+    if (saw413) log('RPC: nho lan truoc bi chan -> cat nho ngay tu dau');
+    function remember413(why) {
+      saw413 = true;
+      try { sessionStorage.setItem(RPC_413_KEY, '1'); } catch (e) {}
+      log('RPC bi chan (' + why + ') -> tu day moi request lon deu cat nho');
+    }
     window.fetch = function (input, init) {
       try {
         var raw = '';
@@ -592,15 +603,21 @@
               log('RPC ' + bytes + 'B -> cat nho: ' + u.pathname);
               return chunkedRpc(path, hdrs, txtBody, bytes);
             }
-            /* AUTO: gui THANG mot lan cho nhanh. Chi khi bi 413 moi cat nho, va
-               ghi nho mang nay co tran -> cac request sau cat luon. */
+            /* AUTO: gui THANG mot lan cho nhanh. Chi khi bi chan moi cat nho,
+               va ghi nho mang nay co tran -> cac request sau cat luon. */
             return direct().then(function (res) {
               if (res && res.status === 413) {
-                saw413 = true;
-                log('RPC ' + bytes + 'B bi 413 -> gui lai dang cat nho');
+                remember413('413');
                 return chunkedRpc(path, hdrs, txtBody, bytes);
               }
               return res;
+            }, function (err) {
+              /* Proxy cong ty thuong CAT NGANG ket noi thay vi tra 413 (chan
+                 truyen tai dai). Truong hop nay truoc day khong duoc thu lai
+                 nen nguoi dung chi thay loi. Gio thu lai bang duong cat nho. */
+              if (RPC_MODE === 'always' || saw413) throw err;
+              remember413('cat ket noi: ' + (err && err.message));
+              return chunkedRpc(path, hdrs, txtBody, bytes);
             });
           }, function (err) {
             /* Doc stream loi (proxy cat giua duong) - tra loi that bai ro rang
