@@ -568,9 +568,18 @@
         if (typeof input === 'string') raw = input;
         else if (input && typeof input.href === 'string') raw = input.href;
         else if (input && typeof input.url === 'string') raw = input.url;
-        if (raw && raw.indexOf('/api/') !== -1 && init && !init.__bridgeBodyRead &&
+        if (raw && init && !init.__bridgeBodyRead &&
             (init.method === 'POST' || init.method === 'post') &&
             (typeof init.body === 'string' || (init.body && typeof init.body.getReader === 'function'))) {
+          /* DSH 0.2 gui URL TUONG DOI khong co dau '/' dau ("api/session/prompt"),
+             con 0.1 gui URL tuyet doi ("https://host/api/..."). Vi vay phai
+             phan giai URL roi moi so khop pathname; kiem tra chuoi '/api/' truc
+             tiep se truot het request cua 0.2. */
+          var targetUrl = null;
+          try { targetUrl = new URL(raw, window.location.href); } catch (e) { targetUrl = null; }
+          var pathname = targetUrl ? targetUrl.pathname : '';
+          var isApi = targetUrl !== null && (pathname === '/api' || pathname.indexOf('/api/') === 0);
+          if (!isApi) return nativeFetch.apply(this, arguments);
           var text = readBodyText(init.body);
           if (text === null) return nativeFetch.apply(this, arguments);
           var self = this;
@@ -588,7 +597,7 @@
                 signal: init.signal
               });
             }
-            var u = new URL(raw, window.location.href);
+            var u = targetUrl;
             var hdrs = {};
             var h = init.headers;
             if (h && typeof h.forEach === 'function') h.forEach(function (v, k) { hdrs[String(k).toLowerCase()] = String(v); });
