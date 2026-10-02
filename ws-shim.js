@@ -317,14 +317,19 @@
                           try {
                             if (name === 'resources') {
                               window.__DSH_BRIDGE_REGISTRY__ = value;
+                              /* Co the co NHIEU instance ResourceRegistry (moi lan
+                                 provide mot cai). Giu het de biet cai nao co provider. */
+                              if (!window.__DSH_BRIDGE_REGISTRIES__) window.__DSH_BRIDGE_REGISTRIES__ = [];
+                              if (window.__DSH_BRIDGE_REGISTRIES__.indexOf(value) === -1) window.__DSH_BRIDGE_REGISTRIES__.push(value);
                               if (value && typeof value.register === 'function' && value.__bridgeWrapped !== true) {
                                 value.__bridgeWrapped = true;
+                                var myIndex = window.__DSH_BRIDGE_REGISTRIES__.indexOf(value);
                                 var origReg = value.register;
                                 value.register = function (provider) {
                                   try {
                                     var proto = provider && provider.protocol;
-                                    window.__DSH_BRIDGE_PROTOCOLS__ = (window.__DSH_BRIDGE_PROTOCOLS__ || []).concat([proto]);
-                                    report('resource-provider-registered', { protocol: proto });
+                                    window.__DSH_BRIDGE_PROTOCOLS__ = (window.__DSH_BRIDGE_PROTOCOLS__ || []).concat([proto + '@' + myIndex]);
+                                    report('resource-provider-registered', { protocol: proto, registry: myIndex });
                                   } catch (e) {}
                                   return origReg.apply(this, arguments);
                                 };
@@ -478,6 +483,17 @@
           out.registry = 'not captured';
         }
         out.registeredProtocols = window.__DSH_BRIDGE_PROTOCOLS__ || null;
+        try {
+          var all = window.__DSH_BRIDGE_REGISTRIES__ || [];
+          out.registries = all.map(function (r, i) {
+            return {
+              i: i,
+              providers: r && r.providers && typeof r.providers.keys === 'function' ? [].slice.call(r.providers.keys()) : null,
+              records: r && r.records ? r.records.size : null,
+              same: r === reg
+            };
+          });
+        } catch (e) { out.registriesError = String((e && e.message) || e); }
         if (ctx.get) {
           out.hasRemote = !!ctx.get('remote');
           out.hasWorkspaceFiles = !!ctx.get('remote.workspaceFiles');
