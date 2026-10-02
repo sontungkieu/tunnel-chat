@@ -276,6 +276,53 @@
         return origLoad.call(this, spec);
       };
     }
+    /* ---- tu kiem tra duong truyen ----
+       Gui thu vai POST to nho khac content-type toi /diag/echo de biet proxy
+       cong ty chan loai nao. Chay khi upload loi, hoac khi mo ?selftest=1. */
+    var selfTestRunning = false;
+    function uploadSelfTest(why) {
+      if (selfTestRunning) return;
+      selfTestRunning = true;
+      function bytes(n) { var a = new Uint8Array(n); for (var i = 0; i < n; i++) a[i] = i % 251; return a; }
+      function b64(n) {
+        var a = bytes(n), s = '';
+        for (var i = 0; i < a.length; i++) s += String.fromCharCode(a[i]);
+        try { return btoa(s); } catch (e) { return null; }
+      }
+      var tests = [
+        { name: 'json-100B', ct: 'application/json', body: JSON.stringify({ probe: 1 }) },
+        { name: 'octet-1KB', ct: 'application/octet-stream', body: bytes(1024) },
+        { name: 'octet-32KB', ct: 'application/octet-stream', body: bytes(32768) },
+        { name: 'octet-256KB', ct: 'application/octet-stream', body: bytes(262144) },
+        { name: 'text-32KB', ct: 'text/plain', body: bytes(32768) },
+        { name: 'base64json-32KB', ct: 'application/json', body: b64(32768) === null ? '{}' : JSON.stringify({ b64: b64(32768) }) }
+      ];
+      report('selftest-start', { why: String(why), transport: mode });
+      tests.reduce(function (chain, t) {
+        return chain.then(function () {
+          var started = Date.now();
+          return fetch(PREFIX + '/diag/echo', {
+            method: 'POST',
+            headers: { 'content-type': t.ct },
+            body: t.body,
+            credentials: 'same-origin',
+            cache: 'no-store'
+          }).then(function (r) {
+            return r.text().then(function (txt) {
+              report('selftest-ok', { name: t.name, status: r.status, ms: Date.now() - started, echo: String(txt).slice(0, 60) });
+            });
+          }, function (e) {
+            report('selftest-fail', { name: t.name, ms: Date.now() - started, message: String((e && e.message) || e) });
+          });
+        });
+      }, Promise.resolve()).then(function () {
+        selfTestRunning = false;
+        report('selftest-done', { why: String(why) });
+      });
+    }
+    window.__DSH_BRIDGE_SELFTEST__ = uploadSelfTest;
+    if (qs('selftest') === '1') setTimeout(function () { uploadSelfTest('?selftest=1'); }, 1500);
+
     /* Boc Worker de bat ket qua upload cua DSH (worker upload gui ve
        {kind:'complete'|'error'}). Khong co buoc nay thi loi upload nam
        trong worker, khong bao gio noi ra ngoai. */
@@ -293,6 +340,8 @@
                   worker: (options && options.name) || '',
                   message: String(d.message || '').slice(0, 400)
                 });
+                /* upload that bai -> do ngay xem proxy chan loai request nao */
+                try { uploadSelfTest('upload worker bao loi'); } catch (e) {}
               } else if (d.kind === 'complete' && d.status !== 200) {
                 report('upload-worker-bad-status', {
                   worker: (options && options.name) || '',

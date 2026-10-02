@@ -407,23 +407,68 @@ function blobInit(req, res) {
   }).catch(function (e) { sendJson(res, 400, { error: e.message }); });
 }
 
+/* Mot manh cua blob.
+   Chi gui lai duoc an toan: truoc moi lan ghi, cat file ve dung offset da
+   xac nhan (b.received), nen manh bi cat giua duong roi gui lai khong lam hong
+   du lieu. Manh da nhan roi (seq < b.seq) tra 200 luon.
+   Ho tro hai dang body:
+     - raw : application/octet-stream, ghi truc tiep (mac dinh)
+     - b64 : application/json {b64:"..."} hoac ?enc=b64
+   Dang b64 dung khi proxy cong ty chan POST nhi phan. */
 function blobChunk(req, res, url) {
   const b = blobs.get(String(url.searchParams.get('bid') || ''));
   if (!b) return sendJson(res, 409, { error: 'no such blob' });
   const seq = Number(url.searchParams.get('seq') || 0);
+  if (seq < b.seq) return sendJson(res, 200, { ok: true, received: b.received, seq: b.seq, duplicate: true });
   if (seq !== b.seq) return sendJson(res, 409, { error: 'out of order chunk: expected ' + b.seq + ', got ' + seq });
-  const out = fs.createWriteStream(b.file, { flags: 'a' });
-  let size = 0;
-  req.on('data', function (c) { size += c.length; });
-  req.on('error', function () { try { out.destroy(); } catch (e) {} });
-  out.on('error', function (e) { if (!res.headersSent) sendJson(res, 500, { error: 'write failed: ' + e.message }); });
-  out.on('finish', function () {
-    b.received += size;
+
+  const enc = String(url.searchParams.get('enc') || '');
+  const ctype = String(req.headers['content-type'] || '');
+  const isB64 = enc === 'b64' || ctype.indexOf('application/json') === 0;
+
+  let settled = false;
+  const done = function (length, via) {
+    if (settled) return;
+    settled = true;
+    b.received += length;
     b.seq += 1;
     stats.blobChunks += 1;
-    stats.blobBytes += size;
-    sendJson(res, 200, { ok: true, received: b.received, seq: b.seq });
-  });
+    stats.blobBytes += length;
+    if (via === 'b64') log('BLOB', b.bid.slice(0, 8), 'chunk ' + seq + ' ' + length + 'B qua base64');
+    sendJson(res, 200, { ok: true, received: b.received, seq: b.seq, enc: via });
+  };
+  const fail = function (status, message) {
+    if (settled) return;
+    settled = true;
+    log('BLOB', b.bid.slice(0, 8), 'chunk ' + seq + ' LOI: ' + message);
+    sendJson(res, status, { error: message });
+  };
+
+  /* Moi lan ghi bat dau lai tu offset da xac nhan, nen manh bi cat giua
+     duong roi gui lai khong lam hong du lieu. */
+  try { fs.truncateSync(b.file, b.received); } catch (e) {}
+
+  if (isB64) {
+    readBody(req).then(function (buf) {
+      let data;
+      try {
+        const parsed = JSON.parse(buf.toString('utf8'));
+        data = Buffer.from(String(parsed.b64 || ''), 'base64');
+      } catch (e) { return fail(400, 'bad base64 chunk: ' + e.message); }
+      fs.appendFile(b.file, data, function (err) {
+        if (err) return fail(500, 'write failed: ' + err.message);
+        done(data.length, 'b64');
+      });
+    }).catch(function (e) { fail(400, String((e && e.message) || e)); });
+    return;
+  }
+
+  let size = 0;
+  const out = fs.createWriteStream(b.file, { flags: 'a' });
+  req.on('data', function (c) { size += c.length; });
+  req.on('error', function () { try { out.destroy(); } catch (e) {} });
+  out.on('error', function (e) { fail(500, 'write failed: ' + e.message); });
+  out.on('finish', function () { done(size, 'raw'); });
   req.pipe(out);
 }
 

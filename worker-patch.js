@@ -69,18 +69,50 @@
         var end = Math.min(offset + CHUNK, blob.size);
         var slice = blob.slice(offset, end);
         var thisSeq = seq;
-        return fetch(bridgeUrl('/blob/chunk?bid=' + encodeURIComponent(bid) + '&seq=' + thisSeq), {
-          method: 'POST',
-          headers: { 'content-type': 'application/octet-stream' },
-          body: slice,
-          credentials: 'same-origin'
-        }).then(function (r) {
-          if (!r.ok) throw new Error('blob chunk ' + thisSeq + ' -> HTTP ' + r.status);
-          offset = end;
-          seq += 1;
-          if (onProgress) { try { onProgress(offset, blob.size); } catch (e) {} }
-          return next();
-        });
+        function raw() {
+          return fetch(bridgeUrl('/blob/chunk?bid=' + encodeURIComponent(bid) + '&seq=' + thisSeq), {
+            method: 'POST',
+            headers: { 'content-type': 'application/octet-stream' },
+            body: slice,
+            credentials: 'same-origin'
+          });
+        }
+        /* Nhieu proxy cong ty chan POST nhi phan (application/octet-stream).
+           Khi manh raw that bai, gui lai chinh manh do dang JSON base64 -
+           trong giong mot loi goi API binh thuong. */
+        function asBase64() {
+          return slice.arrayBuffer().then(function (buf) {
+            var u8 = new Uint8Array(buf);
+            var s = '';
+            for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+            var b64;
+            try { b64 = btoa(s); } catch (e) { throw new Error('base64 encode failed'); }
+            return fetch(bridgeUrl('/blob/chunk?bid=' + encodeURIComponent(bid) + '&seq=' + thisSeq + '&enc=b64'), {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ b64: b64 }),
+              credentials: 'same-origin'
+            });
+          });
+        }
+        function attempt(useBase64) {
+          return (useBase64 ? asBase64() : raw()).then(function (r) {
+            if (!r.ok) throw new Error('blob chunk ' + thisSeq + ' -> HTTP ' + r.status);
+            offset = end;
+            seq += 1;
+            if (onProgress) { try { onProgress(offset, blob.size); } catch (e) {} }
+            return next();
+          }, function (err) {
+            if (useBase64) throw err;
+            reportWorker('worker-chunk-fallback', {
+              seq: thisSeq,
+              size: slice.size,
+              message: String((err && err.message) || err)
+            });
+            return attempt(true);
+          });
+        }
+        return attempt(false);
       }
       return next().then(function () {
         return fetch(bridgeUrl('/blob/finish?bid=' + encodeURIComponent(bid)), { method: 'POST', credentials: 'same-origin' });
