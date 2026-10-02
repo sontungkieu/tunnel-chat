@@ -65,6 +65,7 @@
       var seq = 0;
       var offset = 0;
       var fallbackReported = false;
+      var shrinkReported = false;
       function next() {
         if (offset >= blob.size) return Promise.resolve();
         var thisSeq = seq;
@@ -117,11 +118,14 @@
               }
               return attempt(true, sl.size, tries);
             }
-            if (r.status === 413 && tries < 4 && sl.size > 4096) {
-              var smaller = Math.max(4096, Math.floor(sl.size / 2));
-              reportWorker('worker-chunk-shrink', {
-                seq: thisSeq, from: sl.size, to: smaller, http: r.status
-              });
+            if (r.status === 413 && tries < 10 && sl.size > 1024) {
+              var smaller = Math.max(1024, Math.floor(sl.size / 2));
+              if (!shrinkReported) {
+                shrinkReported = true;
+                reportWorker('worker-chunk-shrink', {
+                  seq: thisSeq, from: sl.size, to: smaller, http: r.status
+                });
+              }
               return attempt(true, smaller, tries + 1);
             }
             throw new Error('blob chunk ' + thisSeq + ' -> HTTP ' + r.status);
@@ -135,11 +139,14 @@
               }
               return attempt(true, sl.size, tries);
             }
-            if (tries < 4 && sl.size > 4096) {
-              var smaller = Math.max(4096, Math.floor(sl.size / 2));
-              reportWorker('worker-chunk-shrink', {
-                seq: thisSeq, from: sl.size, to: smaller, message: String((err && err.message) || err)
-              });
+            if (tries < 10 && sl.size > 1024) {
+              var smaller = Math.max(1024, Math.floor(sl.size / 2));
+              if (!shrinkReported) {
+                shrinkReported = true;
+                reportWorker('worker-chunk-shrink', {
+                  seq: thisSeq, from: sl.size, to: smaller, message: String((err && err.message) || err)
+                });
+              }
               return attempt(true, smaller, tries + 1);
             }
             throw err;

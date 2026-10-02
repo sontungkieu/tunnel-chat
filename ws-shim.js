@@ -214,6 +214,29 @@
       }, 400);
     }
 
+    /* Bat console.warn/error: Cordis bao o day khi mot plugin phai CHO
+       service (inject khong thoa) hoac khi apply() nem loi - dung thu ma
+       khong xuat hien o dau khac. */
+    try {
+      ['warn', 'error'].forEach(function (lvl) {
+        var orig = console[lvl];
+        if (typeof orig !== 'function') return;
+        console[lvl] = function () {
+          try {
+            var parts = Array.prototype.slice.call(arguments).map(function (a) {
+              if (typeof a === 'string') return a;
+              if (a instanceof Error) return a.message;
+              try { return JSON.stringify(a); } catch (e) { return String(a); }
+            });
+            var text = parts.join(' ').slice(0, 700);
+            if (text.indexOf('dsh-bridge') !== -1) return orig.apply(console, arguments);
+            report('console-' + lvl, { text: text });
+          } catch (e) {}
+          return orig.apply(console, arguments);
+        };
+      });
+    } catch (e) {}
+
     try {
       window.addEventListener('error', function (ev) {
         if (ev && ev.target && ev.target !== window && ev.target.tagName) {
@@ -251,19 +274,21 @@
     /* Bat plugin nao nem loi luc factory chay: day la nguyen nhan hang dau
        khien mot plugin khong bao gio duoc dang ky (vd file resource). */
     var loaderValue;
-    function hookLoader(loader) {
-      if (!loader || loader.__bridgeHooked === true) return;
-      var origLoad = loader.load;
-      if (typeof origLoad !== 'function') return;
-      loader.__bridgeHooked = true;
-      loader.load = function (spec) {
+    /* QUAN TRONG: loader cua DSH thay han .load khi module system boot
+       (target.load = (registration) => this.register(registration)). Neu chi
+       gan de len thi hook bi mat ngay sau module dau tien. Vi vay dung property
+       setter de moi lan loader tu gan lai, ham cua ta van duoc boc. */
+    function wrapLoad(fn) {
+      if (typeof fn !== 'function') return fn;
+      return function (spec) {
         try {
           if (spec && typeof spec.id === 'string') loadedIds.push(spec.id);
           if (spec && typeof spec.factory === 'function') {
             var orig = spec.factory;
             spec.factory = function (require) {
+              var out;
               try {
-                return orig.call(this, require);
+                out = orig.call(this, require);
               } catch (e) {
                 report('plugin-factory-threw', {
                   id: spec.id,
@@ -272,11 +297,69 @@
                 });
                 throw e;
               }
+              /* Giu lai Cordis context cua plugin resources: tu do doc duoc
+                 registry provider (protocol nao da dang ky) - thu quyet dinh
+                 de biet vi sao 'file resource service' khong co. */
+              try {
+                if (spec.id === '@deepseek-ai/dsh-client-resources' && out && typeof out.apply === 'function') {
+                  var origApply = out.apply;
+                  out.apply = function (ctx) {
+                    try { window.__DSH_BRIDGE_CTX__ = ctx; } catch (e) {}
+                    /* Bat DUNG instance registry ma app dung, va ghi lai moi
+                       provider duoc dang ky (protocol nao). Day la thu tra loi
+                       truc tiep vi sao 'file resource service' khong co. */
+                    try {
+                      var reflect = ctx && ctx.reflect;
+                      if (reflect && typeof reflect.provide === 'function' && reflect.__bridgeWrapped !== true) {
+                        reflect.__bridgeWrapped = true;
+                        var origProvide = reflect.provide;
+                        reflect.provide = function (name, value) {
+                          try {
+                            if (name === 'resources') {
+                              window.__DSH_BRIDGE_REGISTRY__ = value;
+                              if (value && typeof value.register === 'function' && value.__bridgeWrapped !== true) {
+                                value.__bridgeWrapped = true;
+                                var origReg = value.register;
+                                value.register = function (provider) {
+                                  try {
+                                    var proto = provider && provider.protocol;
+                                    window.__DSH_BRIDGE_PROTOCOLS__ = (window.__DSH_BRIDGE_PROTOCOLS__ || []).concat([proto]);
+                                    report('resource-provider-registered', { protocol: proto });
+                                  } catch (e) {}
+                                  return origReg.apply(this, arguments);
+                                };
+                              }
+                            }
+                          } catch (e) {}
+                          return origProvide.apply(this, arguments);
+                        };
+                      }
+                    } catch (e) {}
+                    return origApply.apply(this, arguments);
+                  };
+                }
+              } catch (e) {}
+              return out;
             };
           }
         } catch (e) {}
-        return origLoad.call(this, spec);
+        return fn.apply(this, arguments);
       };
+    }
+    function hookLoader(loader) {
+      if (!loader || loader.__bridgeHooked === true) return;
+      loader.__bridgeHooked = true;
+      try {
+        var current = wrapLoad(loader.load);
+        Object.defineProperty(loader, 'load', {
+          configurable: true,
+          enumerable: true,
+          get: function () { return current; },
+          set: function (next) { current = wrapLoad(next); }
+        });
+      } catch (e) {
+        try { loader.load = wrapLoad(loader.load); } catch (e2) {}
+      }
     }
     /* ---- tu kiem tra duong truyen ----
        Gui thu vai POST to nho khac content-type toi /diag/echo de biet proxy
@@ -350,6 +433,12 @@
                   status: d.status,
                   body: d.body === undefined ? null : String(d.body).slice(0, 300)
                 });
+                /* Upload hong: LAN SAU bat dau voi manh nho hon. */
+                var next = Math.max(1024, Math.floor(chunkBytes / 2));
+                if (next < chunkBytes) {
+                  chunkBytes = next;
+                  try { localStorage.setItem('dsh.bridge.chunk', String(next)); } catch (e) {}
+                }
               }
             });
           } catch (e) {}
@@ -374,6 +463,35 @@
 
     /* Khi giao dien hien dung cau loi nay thi gui kem trang thai plugin,
        de biet plugin nao chua duoc nap. */
+    /* Doc thang registry provider tu Cordis context (neu bat duoc). */
+    function resourceDiag() {
+      var out = { ctx: false };
+      try {
+        var ctx = window.__DSH_BRIDGE_CTX__;
+        if (!ctx) return out;
+        out.ctx = true;
+        var reg = window.__DSH_BRIDGE_REGISTRY__;
+        if (reg) {
+          if (reg.providers && typeof reg.providers.keys === 'function') out.providers = [].slice.call(reg.providers.keys());
+          if (reg.records && typeof reg.records.size === 'number') out.records = reg.records.size;
+        } else {
+          out.registry = 'not captured';
+        }
+        out.registeredProtocols = window.__DSH_BRIDGE_PROTOCOLS__ || null;
+        if (ctx.get) {
+          out.hasRemote = !!ctx.get('remote');
+          out.hasWorkspaceFiles = !!ctx.get('remote.workspaceFiles');
+        }
+        var tabs = [].slice.call(document.querySelectorAll('[data-textpreview-url]')).map(function (e) {
+          return { url: e.getAttribute('data-textpreview-url'), state: e.getAttribute('data-textpreview-state') };
+        });
+        if (tabs.length) out.tabs = tabs.slice(0, 5);
+      } catch (e) {
+        out.error = String((e && e.message) || e);
+      }
+      return out;
+    }
+
     var probed = 0;
     function probe() {
       probed += 1;
@@ -383,11 +501,18 @@
         var txt = document.body.innerText || '';
         if (txt.indexOf('file resource service is unavailable') !== -1 ||
             txt.indexOf('\u6587\u4ef6\u8d44\u6e90\u670d\u52a1\u4e0d\u53ef\u7528') !== -1) {
+          var diag = resourceDiag();
           report('resource-unavailable-seen', {
             ids: loadedIds.filter(function (id) {
               return /workspace-files|client-resources|api-gateway|documentpreview|sidebar-files|client-modules/.test(id);
             }),
             loadedCount: loadedIds.length,
+            providers: diag.providers,
+            records: diag.records,
+            hasRemote: diag.hasRemote,
+            hasWorkspaceFiles: diag.hasWorkspaceFiles,
+            ctxCaptured: diag.ctx,
+            diagError: diag.error,
             boot: (function () { try { return Object.keys(window.__DSH_BOOT__ || {}); } catch (e) { return null; } })()
           });
           if (probed > 4) return;
@@ -405,7 +530,10 @@
     if (q && /^[0-9]+$/.test(q)) { var v = Number(q); try { localStorage.setItem('dsh.bridge.chunk', String(v)); } catch (e) {} return v; }
     try { return Number(localStorage.getItem('dsh.bridge.chunk')) || 0; } catch (e) { return 0; }
   })();
-  if (!chunkBytes || chunkBytes < 1024) chunkBytes = 32768;
+  /* Mac dinh 4 KB: proxy cong ty chan POST tu khoang 8 KB tro len (do duoc tu
+     log: 32 KB / 16 KB / 8 KB deu bi 413). Bat dau nho thi khong phai co manh
+     tung buoc nhu truoc (mot file 678 KB tung mat 42 giay chi de do nguong). */
+  if (!chunkBytes || chunkBytes < 1024) chunkBytes = 4096;
   if (chunkBytes > 1048576) chunkBytes = 1048576;
   var thresholdBytes = 262144;
 
