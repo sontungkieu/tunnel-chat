@@ -64,24 +64,24 @@
       var bid = init.bid;
       var seq = 0;
       var offset = 0;
+      var fallbackReported = false;
       function next() {
         if (offset >= blob.size) return Promise.resolve();
-        var end = Math.min(offset + CHUNK, blob.size);
-        var slice = blob.slice(offset, end);
         var thisSeq = seq;
-        function raw() {
+
+        function raw(sl) {
           return fetch(bridgeUrl('/blob/chunk?bid=' + encodeURIComponent(bid) + '&seq=' + thisSeq), {
             method: 'POST',
             headers: { 'content-type': 'application/octet-stream' },
-            body: slice,
+            body: sl,
             credentials: 'same-origin'
           });
         }
-        /* Nhieu proxy cong ty chan POST nhi phan (application/octet-stream).
-           Khi manh raw that bai, gui lai chinh manh do dang JSON base64 -
-           trong giong mot loi goi API binh thuong. */
-        function asBase64() {
-          return slice.arrayBuffer().then(function (buf) {
+        /* Nhieu proxy cong ty chan POST nhi phan (application/octet-stream),
+           tra 413 hoac cat ket noi. Khi manh raw that bai, gui lai chinh manh
+           do dang JSON base64 - trong nhu mot loi goi API binh thuong. */
+        function asBase64(sl) {
+          return sl.arrayBuffer().then(function (buf) {
             var u8 = new Uint8Array(buf);
             var s = '';
             for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
@@ -95,24 +95,57 @@
             });
           });
         }
-        function attempt(useBase64) {
-          return (useBase64 ? asBase64() : raw()).then(function (r) {
-            if (!r.ok) throw new Error('blob chunk ' + thisSeq + ' -> HTTP ' + r.status);
-            offset = end;
-            seq += 1;
-            if (onProgress) { try { onProgress(offset, blob.size); } catch (e) {} }
-            return next();
+
+        /* size: so byte yeu cau cho manh nay (co the giam dan khi bi 413). */
+        function attempt(useBase64, size, tries) {
+          var sl = blob.slice(offset, offset + size);
+          return (useBase64 ? asBase64(sl) : raw(sl)).then(function (r) {
+            if (r.ok) {
+              offset += sl.size;
+              seq += 1;
+              if (onProgress) { try { onProgress(offset, blob.size); } catch (e) {} }
+              return next();
+            }
+            /* QUAN TRONG: 413 la response THANH CONG (khong reject), nen phai
+               xu ly o day, khong chi o nhanh loi. */
+            if (!useBase64) {
+              if (!fallbackReported) {
+                fallbackReported = true;
+                reportWorker('worker-chunk-fallback', {
+                  seq: thisSeq, size: sl.size, http: r.status
+                });
+              }
+              return attempt(true, sl.size, tries);
+            }
+            if (r.status === 413 && tries < 4 && sl.size > 4096) {
+              var smaller = Math.max(4096, Math.floor(sl.size / 2));
+              reportWorker('worker-chunk-shrink', {
+                seq: thisSeq, from: sl.size, to: smaller, http: r.status
+              });
+              return attempt(true, smaller, tries + 1);
+            }
+            throw new Error('blob chunk ' + thisSeq + ' -> HTTP ' + r.status);
           }, function (err) {
-            if (useBase64) throw err;
-            reportWorker('worker-chunk-fallback', {
-              seq: thisSeq,
-              size: slice.size,
-              message: String((err && err.message) || err)
-            });
-            return attempt(true);
+            if (!useBase64) {
+              if (!fallbackReported) {
+                fallbackReported = true;
+                reportWorker('worker-chunk-fallback', {
+                  seq: thisSeq, size: sl.size, message: String((err && err.message) || err)
+                });
+              }
+              return attempt(true, sl.size, tries);
+            }
+            if (tries < 4 && sl.size > 4096) {
+              var smaller = Math.max(4096, Math.floor(sl.size / 2));
+              reportWorker('worker-chunk-shrink', {
+                seq: thisSeq, from: sl.size, to: smaller, message: String((err && err.message) || err)
+              });
+              return attempt(true, smaller, tries + 1);
+            }
+            throw err;
           });
         }
-        return attempt(false);
+        return attempt(false, Math.min(CHUNK, blob.size - offset), 0);
       }
       return next().then(function () {
         return fetch(bridgeUrl('/blob/finish?bid=' + encodeURIComponent(bid)), { method: 'POST', credentials: 'same-origin' });

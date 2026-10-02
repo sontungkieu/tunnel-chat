@@ -162,7 +162,9 @@
     var loadedIds = [];
     function report(kind, data) {
       if (sent >= MAX) return;
-      var key = kind + '|' + String((data && (data.id || data.source || data.message)) || '');
+      /* Khoa chong trung phai phan biet duoc tung truong hop: neu chi lay
+         message thi moi ket qua selftest bi nuot (chung khong co message). */
+      var key = kind + '|' + String((data && (data.id || data.name || data.source || data.seq || data.why || data.message)) || '');
       if (seen[key]) return;
       seen[key] = 1;
       sent += 1;
