@@ -528,6 +528,9 @@
             hasRemote: diag.hasRemote,
             hasWorkspaceFiles: diag.hasWorkspaceFiles,
             ctxCaptured: diag.ctx,
+            registeredProtocols: diag.registeredProtocols,
+            registries: diag.registries,
+            tabs: diag.tabs,
             diagError: diag.error,
             boot: (function () { try { return Object.keys(window.__DSH_BOOT__ || {}); } catch (e) { return null; } })()
           });
