@@ -334,6 +334,38 @@
                                   return origReg.apply(this, arguments);
                                 };
                               }
+                              /* Bat MOI loi goi source(address): day moi la cho
+                                 quyet dinh - dia chi nao, tra ra protocol nao, va
+                                 status ket qua la gi. Khong phu thuoc instance nao
+                                 vi ta va tren prototype. */
+                              try {
+                                var regProto = Object.getPrototypeOf(value);
+                                if (regProto && typeof regProto.source === 'function' && regProto.__bridgeSourceWrapped !== true) {
+                                  regProto.__bridgeSourceWrapped = true;
+                                  var origSource = regProto.source;
+                                  regProto.source = function (address) {
+                                    /* source() tra ve record(...).source, KHONG phai
+                                       record. Lay record noi bo de doc protocol/store. */
+                                    var rec = null;
+                                    try { rec = this.record ? this.record(address) : null; } catch (e) {}
+                                    var out = origSource.apply(this, arguments);
+                                    try {
+                                      var snap = rec && rec.store ? rec.store.getSnapshot() : null;
+                                      report('resource-source', {
+                                        address: String(address).slice(0, 220),
+                                        protocol: rec && rec.protocol,
+                                        status: snap ? snap.status : null,
+                                        providers: this && this.providers && this.providers.keys ? [].slice.call(this.providers.keys()) : null,
+                                        hasFileProvider: !!(this && this.providers && this.providers.get && this.providers.get('file')),
+                                        addressParsed: (function () {
+                                          try { var u = new URL(String(address)); return u.protocol + ' host=' + u.hostname; } catch (e) { return 'PARSE ERROR: ' + (e && e.message); }
+                                        })()
+                                      });
+                                    } catch (e) {}
+                                    return out;
+                                  };
+                                }
+                              } catch (e) {}
                             }
                           } catch (e) {}
                           return origProvide.apply(this, arguments);
