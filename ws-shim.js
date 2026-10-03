@@ -103,6 +103,46 @@
   }
   var COMPAT_SRC = '(' + platformPolyfills.toString() + ')();' + '(' + iteratorPolyfill.toString() + ')();';
   try { platformPolyfills(); iteratorPolyfill(); } catch (e) { bootLog('compat loi: ' + (e && e.message)); }
+
+  /* ---- sua URL cho scheme dsh-resource ----
+     Chrome 123 phan giai 'dsh-resource://file/session/...' ra hostname RONG
+     (Chrome 154 ra 'file'). DSH dung new URL(address).hostname lam protocol
+     de tra provider, nen hostname rong -> protocol undefined -> record ket o
+     trang thai "none" -> "The file resource service is unavailable."
+     Chi boc khi trinh duyet that su phan giai sai. */
+  (function fixDshResourceUrl() {
+    var g = typeof globalThis !== 'undefined' ? globalThis : window;
+    var Native = g.URL;
+    if (typeof Native !== 'function') return;
+    var probe;
+    try { probe = new Native('dsh-resource://probe/x'); } catch (e) { return; }
+    if (probe && probe.hostname === 'probe') return;
+    function FixedURL(input, base) {
+      var u = arguments.length > 1 ? new Native(input, base) : new Native(input);
+      try {
+        var src = String(input);
+        if (String(u.protocol) === 'dsh-resource:' && !u.hostname) {
+          var m = /^dsh-resource:\/\/([^/?#]+)([\s\S]*)$/i.exec(src);
+          if (m) {
+            var host = m[1].toLowerCase();
+            var rest = m[2] || '/';
+            Object.defineProperty(u, 'hostname', { value: host, configurable: true, enumerable: true });
+            Object.defineProperty(u, 'host', { value: host, configurable: true, enumerable: true });
+            Object.defineProperty(u, 'pathname', { value: rest, configurable: true, enumerable: true });
+          }
+        }
+      } catch (e) {}
+      return u;
+    }
+    FixedURL.prototype = Native.prototype;
+    try { Object.setPrototypeOf(FixedURL, Native); } catch (e) {}
+    ['canParse', 'createObjectURL', 'revokeObjectURL', 'parse'].forEach(function (k) {
+      if (Native[k] !== void 0) { try { FixedURL[k] = Native[k]; } catch (e) {} }
+    });
+    g.URL = FixedURL;
+    bootLog('compat: da boc URL vi hostname dsh-resource bi rong');
+  })();
+
   if (!NativeWS) return;
 
   var PREFIX = '/__dsh_bridge';
