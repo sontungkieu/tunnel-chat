@@ -151,6 +151,27 @@ function proxyHttp(req, res) {
     if (upRes.statusCode >= 400 || bodyBytes > 100 * 1024) {
       log('HTTP', req.method, req.url, '->', upRes.statusCode, 'body=' + (bodyBytes || 'chunked') + 'B');
     }
+    /* Phien het/da tu xoa: DSH tra 401 khong co gi. Day trang co link nhap lai.
+       Chi cho GET /; API van nhan JSON nhu cu. */
+    if (upRes.statusCode === 401 && String(req.method || '').toUpperCase() === 'GET') {
+      let reqPath = '/';
+      try { reqPath = new URL(req.url, 'http://internal').pathname; } catch (e) {}
+      if (reqPath === '/') {
+        const page = notLoggedInPage();
+        const hs = sanitizeHeaders(upRes.headers);
+        delete hs['content-length'];
+        delete hs['transfer-encoding'];
+        delete hs['content-encoding'];
+        hs['content-type'] = 'text/html; charset=utf-8';
+        hs['cache-control'] = 'no-store';
+        hs['content-length'] = page.length;
+        upRes.resume();
+        res.writeHead(401, hs);
+        res.end(page);
+        log('HTTP GET / -> 401 (trang chua dang nhap)');
+        return;
+      }
+    }
     if (!ctype.toLowerCase().startsWith('text/html')) {
       res.writeHead(upRes.statusCode, sanitizeHeaders(upRes.headers));
       upRes.pipe(res);
@@ -646,6 +667,64 @@ function safeEqual(a, b) {
   if (x.length !== y.length) return false;
   return crypto.timingSafeEqual(x, y);
 }
+/* Ten cookie phien DSH cua mot authority. Chi can ten de xoa, khong dung secret. */
+function authCookieName(authority) {
+  return 'dsh-auth-' + b64u(crypto.createHash('sha256').update(String(authority)).digest());
+}
+
+/* Huy phien da luu. Cookie phien chi ton tai trong browser, nen phai xoa tu
+   phia client. Server van xoa truoc cookie ma chinh no da cap (30 ngay), con
+   JavaScript xoa tieu con lai. */
+function logoutGet(req, res) {
+  const ip = String(req.socket.remoteAddress || '?');
+  const authority = String(req.headers.host || '');
+  const secure = String(req.headers['x-forwarded-proto'] || '').indexOf('https') !== -1;
+  const name = authCookieName(authority);
+  const tail = '; Max-Age=0; SameSite=Lax; expires=Thu, 01 Jan 1970 00:00:00 GMT' + (secure ? '; Secure' : '');
+  log('LOGOUT', ip, 'xoa phien da luu cua ' + authority);
+  const html = '<!doctype html><html lang="vi"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<title>dsh-bridge - da xoa phien</title>'
+    + '<style>body{font:15px/1.6 system-ui,Segoe UI,sans-serif;max-width:460px;margin:14vh auto;padding:0 18px;color:#111}'
+    + '.ok{color:#0a7d28;font-weight:600}.muted{color:#666;font-size:13px}'
+    + 'a{color:#2563eb}a.go{display:inline-block;margin-top:16px;padding:11px 18px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px}'
+    + '</style></head><body><h2>dsh-bridge</h2>'
+    + '<p class="ok">&#10003; Da xoa phien da luu (<span id="n">0</span> cookie tren trinh duyet nay).</p>'
+    + '<p class="muted">Muon vao lai: dung lai ma PIN hoac dung link mot lan. Phien con lai tren cac may khac van con - o do ban vao <code>' + CFG.prefix + '/logout</code> de tiep tuc huy.</p>'
+    + '<a class="go" href="' + CFG.prefix + '/login">&#272;ang nh&#259;p l&#7841;i</a> '
+    + '<a class="go" href="/">V&#7873; trang</a>'
+    + '<script>(function(){try{var n=0,paths=["/","' + CFG.prefix + '"];'
+    + '(document.cookie||"").split(";").forEach(function(p){var k=p.split("=")[0].trim();if(!k)return;'
+    + 'paths.forEach(function(pa){document.cookie=k+"=; Path="+pa+"; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT";'
+    + 'document.cookie=k+"=; Path="+pa+"; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";});n++;});'
+    + 'var el=document.getElementById("n");if(el)el.textContent=String(n);}catch(e){}})();</script></body></html>';
+  const body = Buffer.from(html, 'utf8');
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    'set-cookie': [name + '=; Path=/' + tail, name + '=; Path=' + CFG.prefix + tail],
+    'content-length': body.length,
+  });
+  res.end(body);
+}
+
+/* Trang day DSH tra khi khong con phien (GET / -> 401). Truoc day no tran, khong
+   ai biet phai lam gi. */
+function notLoggedInPage() {
+  const html = '<!doctype html><html lang="vi"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<title>DSH - chua dang nhap</title>'
+    + '<style>body{font:15px/1.6 system-ui,Segoe UI,sans-serif;max-width:460px;margin:14vh auto;padding:0 18px;color:#111}'
+    + '.muted{color:#666;font-size:13px}a{color:#2563eb}'
+    + 'a.go{display:inline-block;margin-top:16px;padding:11px 18px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px}'
+    + '</style></head><body><h2>DSH</h2>'
+    + '<p><b>Chua dang nhap</b> hoac phien da het han (cookie giu 30 ngay).</p>'
+    + '<a class="go" href="' + CFG.prefix + '/login">&#272;ang nh&#259;p</a>'
+    + '<p class="muted">Da luu ma khong con dung nua? <a href="' + CFG.prefix + '/logout">Xoa phien da luu</a>.</p>'
+    + '</body></html>';
+  return Buffer.from(html, 'utf8');
+}
+
 function loginPage(message) {
   const err = message ? '<p class="bad">' + message + '</p>' : '';
   return '<!doctype html><html lang="vi"><head><meta charset="utf-8">'
@@ -663,6 +742,7 @@ function loginPage(message) {
     + '<p class="muted">M\u00e3 PIN n\u1eb1m \u1edf <code>D:\\dev\\dsh\\bridge\\.login-key</code>. '
     + 'Sau khi \u0111\u0103ng nh\u1eadp m\u1ed9t l\u1ea7n, browser nh\u1edb 30 ng\u00e0y.</p>'
     + '<p class="muted">Ho\u1eb7c d\u00f9ng link m\u1ed9t l\u1ea7n: <code>' + CFG.prefix + '/login?t=&lt;ticket&gt;</code>, t\u1ea1o b\u1eb1ng <code>' + CFG.prefix + '/ticket</code> t\u1eeb m\u00e1y ch\u1ee7.</p>'
+    + '<p class="muted">Phi&ecirc;n n&agrave;o kh&ocirc;ng c&ograve;n d&ugrave;ng n&#7913;a &rarr; <a href="' + CFG.prefix + '/logout">Xo&aacute; phi&ecirc;n &dstrok;&#7863;c l&#432;u</a> (huy cookie trinh duyet nay).</p>'
     + '</body></html>';
 }
 function loginFail(res, ip, why) {
@@ -910,6 +990,7 @@ const server = http.createServer(function (req, res) {
     return loginGet(req, res, url);
   }
   if (p === CFG.prefix + '/ticket') return ticketGet(req, res, url);
+  if (p === CFG.prefix + '/logout') return logoutGet(req, res);
 
   /* Nhan bao loi tu trinh duyet khach (may cong ty khong doc duoc console).
      Ghi ra client-error.log de chan doan tu xa. */
