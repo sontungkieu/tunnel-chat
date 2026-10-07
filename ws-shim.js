@@ -505,13 +505,21 @@
                 /* upload that bai -> do ngay xem proxy chan loai request nao */
                 try { uploadSelfTest('upload worker bao loi'); } catch (e) {}
               } else if (d.kind === 'complete' && d.status !== 200) {
+                var title = null;
+                try {
+                  var m = /<title[^>]*>([^<]{1,200})/i.exec(String(d.body || ''));
+                  if (m) title = m[1].replace(/\s+/g, ' ').trim();
+                } catch (e) {}
                 report('upload-worker-bad-status', {
                   worker: (options && options.name) || '',
                   status: d.status,
+                  title: title,
                   body: d.body === undefined ? null : String(d.body).slice(0, 300)
                 });
-                /* Upload hong: LAN SAU bat dau voi manh nho hon. */
-                var next = Math.max(1024, Math.floor(chunkBytes / 2));
+                /* Upload hong: LAN SAU bat dau voi manh nho hon (chi khi loi
+                   tu proxy; loi JSON tu bridge thi thu nho cung vo ich). */
+                var isBridgeErr = /^\s*\{/.test(String(d.body || ''));
+                var next = isBridgeErr ? chunkBytes : Math.max(1024, Math.floor(chunkBytes / 2));
                 if (next < chunkBytes) {
                   chunkBytes = next;
                   try { localStorage.setItem('dsh.bridge.chunk', String(next)); } catch (e) {}

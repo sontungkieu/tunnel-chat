@@ -52,10 +52,15 @@
       body: JSON.stringify(obj),
       credentials: 'same-origin'
     }).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (j) {
-        if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
-        return j;
-      });
+      if (r.ok) return r.json().catch(function () { return {}; });
+      /* init that bai: phan biet proxy chen HTML voi loi JSON tu bridge. */
+      return r.text().then(function (t) {
+        var ct = '';
+        try { ct = String(r.headers.get('content-type') || ''); } catch (e) {}
+        var isProxy = ct.toLowerCase().indexOf('application/json') === -1;
+        var snippet = String(t || '').replace(/\s+/g, ' ').slice(0, 160);
+        throw new Error((isProxy ? 'proxy-block HTTP ' : 'HTTP ') + r.status + ' ' + snippet);
+      }, function () { throw new Error('HTTP ' + r.status); });
     });
   }
 
@@ -66,6 +71,15 @@
       var offset = 0;
       var fallbackReported = false;
       var shrinkReported = false;
+      /* Proxy chen trang HTML (Squid) thay vi de bridge tra JSON. Nhan dien
+         de phan biet voi loi that tu bridge (luon JSON) -> loi bridge thi
+         fail nhanh, loi proxy thi doi dang / co manh / thu lai. */
+      function proxyBlocked(r) {
+        if (!r || r.ok) return false;
+        var ct = '';
+        try { ct = String(r.headers.get('content-type') || ''); } catch (e) {}
+        return ct.toLowerCase().indexOf('application/json') === -1;
+      }
       function next() {
         if (offset >= blob.size) return Promise.resolve();
         var thisSeq = seq;
@@ -97,28 +111,30 @@
           });
         }
 
-        /* size: so byte yeu cau cho manh nay (co the giam dan khi bi 413). */
-        function attempt(useBase64, size, tries) {
+        /* Thu base64 truoc (JSON nho qua duoc proxy); raw chi la du phong
+           khi base64 bi chan. Het dang thi co manh nho dan. */
+        function attempt(size, tries, rawTried) {
+          var useB64 = !rawTried;
           var sl = blob.slice(offset, offset + size);
-          return (useBase64 ? asBase64(sl) : raw(sl)).then(function (r) {
+          return (useB64 ? asBase64(sl) : raw(sl)).then(function (r) {
             if (r.ok) {
               offset += sl.size;
               seq += 1;
               if (onProgress) { try { onProgress(offset, blob.size); } catch (e) {} }
               return next();
             }
-            /* QUAN TRONG: 413 la response THANH CONG (khong reject), nen phai
-               xu ly o day, khong chi o nhanh loi. */
-            if (!useBase64) {
+            /* Loi JSON tu bridge (vd 409 lech seq) thi doi dang/co manh vo ich. */
+            if (!proxyBlocked(r)) throw new Error('blob chunk ' + thisSeq + ' -> HTTP ' + r.status);
+            if (useB64 && !rawTried) {
               if (!fallbackReported) {
                 fallbackReported = true;
                 reportWorker('worker-chunk-fallback', {
                   seq: thisSeq, size: sl.size, http: r.status
                 });
               }
-              return attempt(true, sl.size, tries);
+              return attempt(sl.size, tries, true);
             }
-            if (r.status === 413 && tries < 10 && sl.size > 1024) {
+            if (tries < 10 && sl.size > 1024) {
               var smaller = Math.max(1024, Math.floor(sl.size / 2));
               if (!shrinkReported) {
                 shrinkReported = true;
@@ -126,18 +142,18 @@
                   seq: thisSeq, from: sl.size, to: smaller, http: r.status
                 });
               }
-              return attempt(true, smaller, tries + 1);
+              return attempt(smaller, tries + 1, false);
             }
             throw new Error('blob chunk ' + thisSeq + ' -> HTTP ' + r.status);
           }, function (err) {
-            if (!useBase64) {
+            if (useB64 && !rawTried) {
               if (!fallbackReported) {
                 fallbackReported = true;
                 reportWorker('worker-chunk-fallback', {
                   seq: thisSeq, size: sl.size, message: String((err && err.message) || err)
                 });
               }
-              return attempt(true, sl.size, tries);
+              return attempt(sl.size, tries, true);
             }
             if (tries < 10 && sl.size > 1024) {
               var smaller = Math.max(1024, Math.floor(sl.size / 2));
@@ -147,12 +163,12 @@
                   seq: thisSeq, from: sl.size, to: smaller, message: String((err && err.message) || err)
                 });
               }
-              return attempt(true, smaller, tries + 1);
+              return attempt(smaller, tries + 1, false);
             }
             throw err;
           });
         }
-        return attempt(false, Math.min(CHUNK, blob.size - offset), 0);
+        return attempt(Math.min(CHUNK, blob.size - offset), 0, false);
       }
       return next().then(function () {
         return fetch(bridgeUrl('/blob/finish?bid=' + encodeURIComponent(bid)), { method: 'POST', credentials: 'same-origin' });
@@ -207,8 +223,13 @@
   };
   BridgeXHR.prototype.send = function (body) {
     var xhr = this;
-    var big = body && typeof body.size === 'number' && body.size > THRESHOLD && isUploadUrl(this._url);
-    if (!big) {
+    var size = body && typeof body.size === 'number' ? body.size : -1;
+    var isUp = isUploadUrl(this._url);
+    /* Moi upload di qua chunked, ke ca file nho: proxy chan ca POST truc
+       tiep nho (403 policy theo URL/content-type), chi tha JSON nho va
+       blob/* cua bridge. Chi giu duong native cho URL khong phai upload
+       hoac body khong slice duoc. THRESHOLD khong con tac dung. */
+    if (!isUp || size < 0) {
       var native = new NativeXHR();
       native.open(this._method, this._url);
       native.withCredentials = this.withCredentials;
@@ -227,6 +248,7 @@
       native.send(body);
       return;
     }
+    try { reportWorker('worker-upload-start', { size: size, via: 'chunked' }); } catch (e) {}
     sendChunked(this._url, this._method, this._headers || {}, body, function (loaded, total) {
       if (xhr.upload.onprogress) xhr.upload.onprogress({ lengthComputable: true, loaded: loaded, total: total });
     }).then(function (res) {
